@@ -1,5 +1,7 @@
 # DevFlow
 
+[![CI](https://github.com/CalvinL10/devflow/actions/workflows/ci.yml/badge.svg)](https://github.com/CalvinL10/devflow/actions/workflows/ci.yml)
+
 DevFlow is a local-first, human-in-the-loop code-change approval workflow. It demonstrates
 durable orchestration, reconnectable event delivery, isolated candidate validation, and
 recoverable publication without presenting a mock provider as a production AI agent.
@@ -571,8 +573,10 @@ managed published workspace is not used as the writable candidate.
 - **Frontend:** REST snapshots remain authoritative; SSE is an invalidation/replay
   channel. There is no persisted browser cursor, cross-tab coordination, or exactly-once
   external side-effect guarantee.
-- **CI evidence:** a GitHub Actions workflow is present, but a checked-in workflow is not
-  evidence that a hosted run passed. Use the actual run result before making that claim.
+- **CI evidence:** [hosted run #2](https://github.com/CalvinL10/devflow/actions/runs/35249610512)
+  passed backend lint/tests, frontend lint/unit/build/Playwright, production image builds,
+  and the Compose workflow smoke test on commit `447caeb`. Later revisions require their
+  own successful run before making the same claim.
 
 Do not describe this revision as a production code-review platform, a fully secure
 sandbox, a real-LLM coding agent, a multi-worker/HA service, or a fully autonomous
