@@ -1,0 +1,104 @@
+name: devflow
+
+services:
+  backend:
+    build:
+      context: ./backend
+      target: production
+    environment:
+      DEVFLOW_DATABASE_PATH: /var/lib/devflow/devflow.sqlite
+      DEVFLOW_LLM_PROVIDER: mock
+      DEVFLOW_RUNNER_SOCKET: /run/devflow/runner.sock
+      LANGGRAPH_STRICT_MSGPACK: "true"
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - devflow-data:/var/lib/devflow
+      - runner-control:/run/devflow
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 1.0
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=2)"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    depends_on:
+      runner-dispatcher:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./client
+      target: production
+      args:
+        DEVFLOW_API_URL: http://backend:8000
+    environment:
+      DEVFLOW_API_URL: http://backend:8000
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 1.0
+
+  runner-dispatcher:
+    build:
+      context: ./backend
+      target: dispatcher
+    image: devflow-candidate-runner:compose
+    environment:
+      DEVFLOW_RUNNER_SOCKET: /run/devflow/runner.sock
+      DEVFLOW_RUNNER_IMAGE: devflow-candidate-runner:compose
+      DEVFLOW_CANDIDATES_ROOT: /var/lib/devflow/workspaces/default/candidates
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=64m
+    volumes:
+      - devflow-data:/var/lib/devflow:ro
+      - runner-control:/run/devflow
+      - /var/run/docker.sock:/var/run/docker.sock
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_READ_SEARCH
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 512m
+    cpus: 1.0
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os, stat; raise SystemExit(not stat.S_ISSOCK(os.stat('/run/devflow/runner.sock').st_mode))"
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+volumes:
+  devflow-data:
+  runner-control:
+
