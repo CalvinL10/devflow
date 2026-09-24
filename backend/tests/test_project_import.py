@@ -9,8 +9,10 @@ from devflow.project_import import ProjectImporter, _git_env
 
 
 def git(repo, *args, data=None):
+    # Fixture commits must finish without detached maintenance changing .git later.
+    # Keep the full source-state assertion; do not ignore transient files.
     return subprocess.run(
-        ["git", "-C", str(repo), *args], input=data, check=True, capture_output=True, env=_git_env()
+        ["git", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", str(repo), *args], input=data, check=True, capture_output=True, env=_git_env()
     ).stdout
 
 
