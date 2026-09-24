@@ -112,6 +112,11 @@ class CreateRunRequest(BaseModel):
         return task.strip()
 
 
+class StartRunRequest(CreateRunRequest):
+    import_id: str | None = Field(default=None, min_length=1, max_length=128)
+    request_id: str = Field(min_length=1, max_length=128)
+
+
 class RunStatus(StrEnum):
     CREATED = "CREATED"
     RUNNING = "RUNNING"
@@ -135,7 +140,7 @@ class HealthResponse(BaseModel):
 
     status: Literal["ok"] = "ok"
     runtime: Literal["single-instance-sqlite"] = "single-instance-sqlite"
-    provider: Literal["mock"] = "mock"
+    provider: Literal["mock", "chat_completions"] = "mock"
 
 
 class ErrorDetail(BaseModel):
@@ -159,7 +164,7 @@ class WorkflowState(BaseModel):
     patch_id: str
     patch_revision: int = Field(ge=1)
     base_workspace_revision: int = Field(ge=0)
-    provider: Literal["mock"] = "mock"
+    provider: Literal["mock", "chat_completions"] = "mock"
     decision: DecisionKind | None = None
     status: RunStatus = RunStatus.RUNNING
     task: str = "Demonstrate the deterministic coding workflow"

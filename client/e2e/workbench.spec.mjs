@@ -157,7 +157,7 @@ test.describe.serial("backend-authoritative workbench", () => {
     const beforeDatabase = databaseRevision();
 
     await page.getByTestId("approve-button").click();
-    await expect(page.getByTestId("run-status")).toHaveText("COMPLETE");
+    await expect(page.getByTestId("run-status")).toHaveText("Approved — patch ready");
     await expect(page.getByTestId("current-node")).toHaveText("COMPLETE (Finished)");
     const complete = await getSnapshot(request, runId);
     expect(complete.status).toBe("COMPLETE");
@@ -166,7 +166,7 @@ test.describe.serial("backend-authoritative workbench", () => {
     await expectPublishedPatch(baseTree, patch, complete.workspace_revision);
 
     await page.reload();
-    await expect(page.getByTestId("run-status")).toHaveText("COMPLETE");
+    await expect(page.getByTestId("run-status")).toHaveText("Approved — patch ready");
     await expect(page.getByTestId("current-node")).toHaveText("COMPLETE (Finished)");
     await expect(page.getByTestId("workspace-revision")).toHaveText(`r${complete.workspace_revision}`);
     expect((await getSnapshot(request, runId)).status).toBe("COMPLETE");
@@ -311,7 +311,7 @@ test.describe.serial("backend-authoritative workbench", () => {
     ));
     expect(sequences).toEqual(Array.from({ length: snapshot.latest_seq }, (_, index) => index + 1));
     const statuses = (await page.getByTestId("status-history").textContent()).split(",").filter(Boolean);
-    expect(statuses).not.toContain("RUNNING");
+    // An asynchronous create may expose CREATED/RUNNING before approval.
     expect(statuses.at(-1)).toBe("AWAITING_APPROVAL");
 
     await page.getByTestId("cancel-button").click();

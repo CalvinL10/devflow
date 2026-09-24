@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from functools import partial
 
 import pytest
 from fastapi.testclient import TestClient
@@ -8,10 +9,12 @@ from support import PassingRunner
 
 from devflow.coordinator import RunCoordinator
 from devflow.errors import InvalidRunTransition
-from devflow.main import create_app
+from devflow.main import create_app as _create_app
 from devflow.mock_provider import DeterministicMockProvider
 from devflow.models import CommandResult, DecisionKind, FilePatch, FilePatchSet, ReviewFinding
 from devflow.workflow import build_graph, open_graph
+
+create_app = partial(_create_app, asynchronous=False, mode="mock", security_enabled=False)
 
 
 def tree(root):

@@ -11,10 +11,12 @@ export class ApiError extends Error {
 async function requestJSON(path, options = {}) {
   const response = await fetch(path, {
     cache: "no-store",
+    credentials: "same-origin",
     ...options,
     headers: {
       Accept: "application/json",
       ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...(options.method && options.method !== "GET" ? { "X-DevFlow-Request": "1" } : {}),
       ...options.headers,
     },
   });
@@ -26,7 +28,8 @@ async function requestJSON(path, options = {}) {
   }
   if (!response.ok) {
     const detail = body?.error || {};
-    const message = detail.message || body?.detail || `Request failed with HTTP ${response.status}`;
+    const message = detail.message || (typeof body?.detail === "string" ? body.detail : null)
+      || `Request failed with HTTP ${response.status}`;
     throw new ApiError(message, {
       status: response.status,
       code: detail.code || `http_${response.status}`,
@@ -36,11 +39,41 @@ async function requestJSON(path, options = {}) {
   return body;
 }
 
-export function createRun(task) {
+export function createRun(task, importId, requestId) {
   return requestJSON("/api/runs", {
     method: "POST",
-    body: JSON.stringify({ task }),
+    body: JSON.stringify({ task, import_id: importId, request_id: requestId }),
   });
+}
+
+export const getHealth = () => requestJSON("/api/health");
+export const getProvider = () => requestJSON("/api/settings/provider");
+export const saveProvider = (settings) => requestJSON("/api/settings/provider", {
+  method: "PUT", body: JSON.stringify(settings),
+});
+export const clearProvider = () => requestJSON("/api/settings/provider", { method: "DELETE" });
+export const testProvider = () => requestJSON("/api/settings/provider/test", { method: "POST", body: "{}" });
+export const getProjectPreview = () => requestJSON("/api/project/preview");
+export const importProject = (selection) => requestJSON("/api/imports", {
+  method: "POST", body: JSON.stringify(selection),
+});
+export const listRuns = (offset = 0) => requestJSON(`/api/runs?limit=20&offset=${offset}`);
+export const stopRun = (runId) => requestJSON(`/api/runs/${encodeURIComponent(runId)}/stop`, {
+  method: "POST", body: "{}",
+});
+export const patchDownloadUrl = (runId) => `/api/runs/${encodeURIComponent(runId)}/patch/download`;
+
+export function canDownloadPatch(run) {
+  return Boolean(run?.import_id && run.status === "COMPLETE"
+    && run.last_decision?.kind === "approve" && !run.pending_decision);
+}
+
+export const newTaskUrl = (task) => `/?task=${encodeURIComponent(task)}`;
+
+// Keep one ID for retries of this exact launch; editing either input starts a new request.
+export function launchRequest(previous, task, importId) {
+  if (previous?.task === task && previous.import_id === importId) return previous;
+  return { task, import_id: importId, request_id: globalThis.crypto.randomUUID() };
 }
 
 export function getActiveRun() {

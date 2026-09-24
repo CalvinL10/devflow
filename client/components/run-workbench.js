@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { RunStreamState, watchRun } from "../run-stream.mjs";
-import { ApiError, decideRun, getPatch, getRun, resumeRun, stableDecision } from "../lib/api.mjs";
+import { ApiError, canDownloadPatch, decideRun, getHealth, getPatch, getRun, newTaskUrl, patchDownloadUrl, resumeRun, stableDecision, stopRun } from "../lib/api.mjs";
 import DiffViewer from "./diff-viewer";
 
 const TERMINAL = new Set(["COMPLETE", "REJECTED", "CANCELED", "FAILED"]);
@@ -56,6 +56,9 @@ export default function RunWorkbench({ runId }) {
   const [actionError, setActionError] = useState("");
   const [feedback, setFeedback] = useState("");
   const [pendingAction, setPendingAction] = useState("");
+  const [healthProvider, setHealthProvider] = useState(null);
+
+  useEffect(() => { getHealth().then((health) => setHealthProvider(health.provider)).catch(() => {}); }, []);
 
   const acceptSnapshot = useCallback((next) => {
     if (streamState.current.acceptSnapshot(next)) {
@@ -209,10 +212,21 @@ export default function RunWorkbench({ runId }) {
     }
   }
 
+  async function stop() {
+    if (pendingAction || (snapshot?.stop_requested && !snapshot?.cleanup_pending)) return;
+    setPendingAction("stop"); setActionError("");
+    try { acceptSnapshot(await stopRun(runId)); }
+    catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : "Unable to request stop.");
+      try { await refreshAuthority(); } catch { /* Retain stop error. */ }
+    } finally { setPendingAction(""); }
+  }
+
   const selectedFile = patch?.files.find((file) => file.path === selectedPath) || null;
   const latestNode = useMemo(() => [...events].reverse().find((event) => event.node)?.node || "—", [events]);
   const canResume = Boolean(snapshot?.pending_decision?.decision_id) && !pendingAction;
   const canDecide = snapshot?.status === "AWAITING_APPROVAL"
+    && !snapshot?.pending_decision && !snapshot?.stop_requested
     && patch?.run_id === runId
     && patch?.patch_revision === snapshot.patch_revision;
   const terminal = TERMINAL.has(snapshot?.status) && !snapshot?.pending_decision;
@@ -239,7 +253,7 @@ export default function RunWorkbench({ runId }) {
             <i />{connectionLabel(connection, terminal)}
           </span>
           <span className={`status-badge status-${snapshot.status.toLowerCase()}`} data-testid="run-status">
-            {snapshot.status}
+            {snapshot.status === "COMPLETE" ? "Approved — patch ready" : snapshot.status}
           </span>
         </div>
       </header>
@@ -255,6 +269,31 @@ export default function RunWorkbench({ runId }) {
           <div><dt>Base workspace</dt><dd>r{snapshot.base_workspace_revision}</dd></div>
           <div><dt>Workspace head</dt><dd data-testid="workspace-revision">r{snapshot.workspace_revision}</dd></div>
         </dl>
+      </section>
+
+      <section className="run-context panel">
+        <p>Provider: <strong>{snapshot.provider || healthProvider || "Unavailable"}</strong>
+          {(snapshot.provider || healthProvider) === "mock" ? " · Demo mode — deterministic mock output, not a real model response." : " · No automatic mock fallback."}</p>
+        <p>Source commit: <code>{snapshot.source_commit || "No imported source"}</code> · Import: {snapshot.import_id || "None"}</p>
+        {["CREATED", "RUNNING"].includes(snapshot.status) ? <div>
+          <button data-testid="stop-button" type="button" disabled={Boolean(pendingAction) || (snapshot.stop_requested && !snapshot.cleanup_pending)} onClick={stop}>
+            {pendingAction === "stop" ? "Requesting stop…" : snapshot.cleanup_pending ? "Retry stop/cleanup" : snapshot.stop_requested ? "Stop requested" : "Stop running task"}
+          </button>
+          {snapshot.cleanup_pending ? <p className="error-banner" role="alert" data-testid="cleanup-warning">Cleanup pending: containers have not been confirmed stopped. This run still occupies the running slot. Retry stop/cleanup or restart the backend to retry cleanup; wait for backend confirmation before starting another run.</p>
+            : <p role="status">{snapshot.stop_requested ? "Stopping at a safe execution boundary. Waiting for backend confirmation." : "Run is in progress. Stop requests execution cancellation; it is separate from canceling an approval."}</p>}
+        </div> : null}
+        {snapshot.error ? <p className="error-banner" role="alert"><strong>{snapshot.error.code}</strong> · {snapshot.error.phase || "run"}: {snapshot.error.message}</p> : null}
+        {["FAILED", "REJECTED"].includes(snapshot.status) ? <Link href={newTaskUrl(snapshot.task)}>Copy to new task</Link> : null}
+        {snapshot.status === "COMPLETE" ? <div>
+          <h2>Approved — patch ready</h2>
+          <p>Approval does not apply changes to your local checkout.</p>
+          {canDownloadPatch(snapshot) ? <>
+            <a data-testid="download-patch" href={patchDownloadUrl(runId)} download="devflow.patch">Download approved patch</a>
+            <p>In a clean checkout at the source commit shown above, save the download as <code>devflow.patch</code>. Review it, then check before applying manually:</p>
+            <pre>git apply --check devflow.patch{"\n"}git apply devflow.patch</pre>
+            <p>If the check fails, do not force it. Resolve the checkout differences or start a new import and run.</p>
+          </> : <p>Downloads require an imported run with a finalized approval. Demo-only patches are not downloadable.</p>}
+        </div> : null}
       </section>
 
       {streamError ? <p className="error-banner" role="alert">Stream: {streamError}</p> : null}
@@ -355,7 +394,7 @@ export default function RunWorkbench({ runId }) {
             ) : null}
             <div className="decision-actions">
               <button data-testid="cancel-button" disabled={!canDecide || Boolean(pendingAction)} onClick={() => decide("cancel")} type="button">
-                {pendingAction === "cancel" ? "Canceling…" : "Cancel"}
+                {pendingAction === "cancel" ? "Canceling…" : "Cancel approval"}
               </button>
               <button className="reject-button" data-testid="reject-button" disabled={!canDecide || Boolean(pendingAction)} onClick={() => decide("reject")} type="button">
                 {pendingAction === "reject" ? "Rejecting…" : "Reject"}

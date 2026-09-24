@@ -23,6 +23,7 @@ export default defineConfig({
           url: "http://127.0.0.1:8000/api/health",
           reuseExistingServer: false,
           timeout: 60_000,
+          env: { DEVFLOW_LLM_PROVIDER: "mock" },
         },
         {
           command: "node --dns-result-order=ipv4first node_modules/next/dist/bin/next dev --hostname localhost --port 3000",

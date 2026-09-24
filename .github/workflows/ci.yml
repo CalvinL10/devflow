@@ -23,9 +23,19 @@ jobs:
       - name: Backend lint
         run: uv run --locked ruff check --no-cache src tests
       - name: Backend unit tests
-        run: uv run --locked pytest -q -p no:cacheprovider tests/test_models.py tests/test_candidate_runner.py tests/test_mock_provider.py tests/test_database.py tests/test_workspace.py tests/test_staging.py tests/test_compose.py tests/test_docker_runner.py
+        run: >-
+          uv run --locked pytest -q -p no:cacheprovider
+          tests/test_models.py tests/test_candidate_runner.py tests/test_mock_provider.py
+          tests/test_database.py tests/test_workspace.py tests/test_staging.py
+          tests/test_compose.py tests/test_launchers.py tests/test_docker_runner.py tests/test_provider.py
+          tests/test_project_import.py tests/test_patch_export.py tests/test_dependencies.py
+          tests/test_runner_beta.py tests/test_provider_probe.py
       - name: Backend integration tests
-        run: uv run --locked pytest -q -p no:cacheprovider tests/test_health.py tests/test_approval_api.py tests/test_events.py tests/test_pipeline.py tests/test_workflow_restart.py tests/test_publication_recovery.py
+        run: >-
+          uv run --locked pytest -q -p no:cacheprovider
+          tests/test_health.py tests/test_approval_api.py tests/test_events.py
+          tests/test_pipeline.py tests/test_workflow_restart.py
+          tests/test_publication_recovery.py tests/test_async_api.py tests/test_supervisor_beta.py
 
   frontend:
     runs-on: ubuntu-latest
@@ -85,16 +95,31 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cleanup() { docker compose down --volumes --remove-orphans; }
+          scratch=$(mktemp -d "$RUNNER_TEMP/devflow-compose-smoke.XXXXXX")
+          chmod 755 "$scratch"
+          export DEVFLOW_PROJECT_PATH="$scratch/project"
+          python3 scripts/ci-compose-smoke.py prepare --fixture "$DEVFLOW_PROJECT_PATH"
+          # The read-only source belongs to the production backend UID; Git can
+          # inspect it without a safe.directory wildcard or disabled security.
+          sudo chown -R 10001:10001 "$DEVFLOW_PROJECT_PATH"
+          # Only select the mock provider. Keep production security, the real
+          # dispatcher, read-only project mount and frontend-only port mapping.
+          printf '%s\n' '{"services":{"backend":{"environment":{"DEVFLOW_LLM_PROVIDER":"mock"}}}}' > "$scratch/mock.json"
+          compose=(docker compose --project-name "devflow-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" -f compose.yaml -f "$scratch/mock.json")
+          cleanup() {
+            code=$?
+            if [ "$code" -ne 0 ]; then
+              "${compose[@]}" ps --all || true
+              "${compose[@]}" logs --no-color --tail 200 || true
+            fi
+            "${compose[@]}" down --volumes --remove-orphans || code=1
+            exit "$code"
+          }
           trap cleanup EXIT
-          docker compose up --build --detach
-          for attempt in $(seq 1 30); do
-            if curl --fail --silent http://127.0.0.1:8000/api/health >/dev/null; then break; fi
-            sleep 2
-          done
-          response=$(curl --fail --silent --show-error \
-            -H 'content-type: application/json' \
-            -d '{"task":"CI Compose workflow proof"}' \
-            http://127.0.0.1:8000/api/runs)
-          python -c 'import json,sys; data=json.load(sys.stdin); assert data["status"] == "AWAITING_APPROVAL", data' <<<"$response"
+          "${compose[@]}" up --build --detach --wait --wait-timeout 180
+          # Public sentinel only, not a key: candidate tests must not see the backend-only volume.
+          "${compose[@]}" exec -T backend python -c 'from pathlib import Path; Path("/var/lib/devflow-secrets/ci-boundary-marker").write_text("public CI volume isolation sentinel")'
+          # Check the container mount, not just host chmod or source Git config.
+          "${compose[@]}" exec -T backend python -c 'import stat; from pathlib import Path; names = ("src/fixture.py", "test_fixture.py", "devflow_task.py", "test_devflow_task.py", "pyproject.toml"); modes = {name: stat.S_IMODE((Path("/project") / name).stat().st_mode) for name in names}; print("Mounted fixture modes:", {name: oct(mode) for name, mode in modes.items()}); raise SystemExit(0 if all(mode == 0o644 for mode in modes.values()) else "Fixture mount must preserve committed 100644 modes; synthetic NTFS modes are unsupported")'
+          python3 scripts/ci-compose-smoke.py verify --fixture "$DEVFLOW_PROJECT_PATH" --timeout 360
 

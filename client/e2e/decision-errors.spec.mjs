@@ -32,7 +32,7 @@ for (const scenario of ["conflict", "own-lost-response", "other-lost-response", 
     await page.goto(`/runs/${runId}`);
     await expect(page.getByTestId("approve-button")).toBeEnabled();
     await page.getByTestId("approve-button").click();
-    await expect(page.getByTestId("run-status")).toHaveText(scenario === "own-failed" ? "FAILED" : "COMPLETE");
+    await expect(page.getByTestId("run-status")).toHaveText(scenario === "own-failed" ? "FAILED" : "Approved — patch ready");
     await expect(page.getByTestId("approve-button")).toHaveText("Approve");
     if (scenario === "own-lost-response") {
       await expect(page.getByTestId("decision-error")).toHaveCount(0);

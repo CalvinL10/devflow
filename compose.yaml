@@ -7,13 +7,23 @@ services:
       target: production
     environment:
       DEVFLOW_DATABASE_PATH: /var/lib/devflow/devflow.sqlite
-      DEVFLOW_LLM_PROVIDER: mock
+      DEVFLOW_PROJECT_PATH: /project
+      DEVFLOW_PROVIDER_SETTINGS: /var/lib/devflow-secrets
+      DEVFLOW_LLM_PROVIDER: chat_completions
+      DEVFLOW_PUBLIC_ORIGIN: http://127.0.0.1:${DEVFLOW_PORT:-3000}
+      DEVFLOW_SECURITY_ENABLED: "1"
       DEVFLOW_RUNNER_SOCKET: /run/devflow/runner.sock
       LANGGRAPH_STRICT_MSGPACK: "true"
-    ports:
-      - "127.0.0.1:8000:8000"
     volumes:
       - devflow-data:/var/lib/devflow
+      - devflow-secrets:/var/lib/devflow-secrets
+      # Missing configuration fails at mount time, not during demo interpolation.
+      - type: bind
+        source: ${DEVFLOW_PROJECT_PATH:-./.devflow-project-required}
+        target: /project
+        read_only: true
+        bind:
+          create_host_path: false
       - runner-control:/run/devflow
     read_only: true
     tmpfs:
@@ -47,7 +57,7 @@ services:
     environment:
       DEVFLOW_API_URL: http://backend:8000
     ports:
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:${DEVFLOW_PORT:-3000}:3000"
     depends_on:
       backend:
         condition: service_healthy
@@ -70,7 +80,7 @@ services:
     environment:
       DEVFLOW_RUNNER_SOCKET: /run/devflow/runner.sock
       DEVFLOW_RUNNER_IMAGE: devflow-candidate-runner:compose
-      DEVFLOW_CANDIDATES_ROOT: /var/lib/devflow/workspaces/default/candidates
+      DEVFLOW_WORKSPACES_ROOT: /var/lib/devflow/workspaces
     network_mode: none
     read_only: true
     tmpfs:
@@ -83,6 +93,9 @@ services:
       - ALL
     cap_add:
       - DAC_READ_SEARCH
+      # main assigns the fixed 0660 control socket to backend UID/GID 10001.
+      # Keep other users denied; do not replace ownership with world-writable 0666.
+      - CHOWN
     security_opt:
       - no-new-privileges:true
     pids_limit: 64
@@ -100,5 +113,6 @@ services:
 
 volumes:
   devflow-data:
+  devflow-secrets:
   runner-control:
 

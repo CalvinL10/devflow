@@ -1,10 +1,11 @@
 {
   "name": "devflow-client",
+  "version": "0.2.0-beta.1",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "test": "node --test run-stream.test.mjs lib/api.test.mjs",
+    "test": "node --test run-stream.test.mjs lib/api.test.mjs lib/request-boundary.test.mjs",
     "test:e2e": "playwright test",
     "lint": "node scripts/lint.mjs"
   },

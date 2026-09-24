@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import time
 
@@ -13,6 +14,72 @@ def test_only_named_actions_are_accepted() -> None:
     assert candidate_runner.action_command("lint")[1:] == ["check", "--no-cache", "."]
     with pytest.raises(ValueError, match="unsupported"):
         candidate_runner.action_command("sh -c whoami")
+
+
+@pytest.mark.parametrize("layout", ["root-module", "root-package", "src-package", "src-namespace"])
+@pytest.mark.parametrize("import_mode", ["prepend", "importlib"])
+def test_real_pytest_imports_candidate_layout_without_install(tmp_path, monkeypatch,
+                                                             layout, import_mode):
+    root = tmp_path / "candidate"
+    root.mkdir()
+    source = root / "src" if layout.startswith("src-") else root
+    source.mkdir(exist_ok=True)
+    if layout == "root-module":
+        (source / "layout_app.py").write_text("VALUE = 42\n", encoding="utf-8")
+        statement = "from layout_app import VALUE"
+    else:
+        package = source / "layout_app"
+        package.mkdir()
+        if layout != "src-namespace":
+            (package / "__init__.py").write_text("", encoding="utf-8")
+        (package / "core.py").write_text("VALUE = 42\n", encoding="utf-8")
+        statement = "from layout_app.core import VALUE"
+    tests = root / "tests"
+    tests.mkdir()
+    (tests / "test_layout.py").write_text(
+        f"{statement}\nimport sys\ndef test_value():\n"
+        "    assert VALUE == 42\n    assert sys.flags.isolated == 1\n",
+        encoding="utf-8",
+    )
+    (root / "pytest.ini").write_text(
+        f"[pytest]\naddopts = --import-mode={import_mode}\ntestpaths = tests\n",
+        encoding="utf-8",
+    )
+    # Local verification changes ONLY the interpreter path, not the launch code.
+    command = candidate_runner.action_command("test")
+    command[0] = sys.executable
+    monkeypatch.setitem(candidate_runner.ALLOWED_ACTIONS, "test", command)
+    monkeypatch.delenv("DEVFLOW_DEPENDENCY_ENV", raising=False)
+    bounded = candidate_runner._run_bounded
+
+    def local_subprocess(command, **kwargs):
+        # Linux containers do not need Windows' system DLL lookup environment.
+        if os.name == "nt":
+            kwargs["env"]["SystemRoot"] = os.environ["SystemRoot"]
+        return bounded(command, **kwargs)
+
+    monkeypatch.setattr(candidate_runner, "_run_bounded", local_subprocess)
+    report = candidate_runner.execute("test", candidate_root=root, timeout_seconds=10)
+    assert report.passed, report.stdout + report.stderr
+
+
+def test_prepared_actions_use_only_the_separate_dependency_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("DEVFLOW_DEPENDENCY_ENV", "1")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "must-not-forward")
+    calls = []
+
+    def execute(command, **kwargs):
+        calls.append((command, kwargs))
+        return 0, b"ok", b"", False, False
+
+    monkeypatch.setattr(candidate_runner, "_run_bounded", execute)
+    assert candidate_runner.execute("test", candidate_root=tmp_path).passed
+    command, options = calls[0]
+    assert command[0] == "/deps/venv/bin/python"
+    assert "-I" in command
+    assert options["env"]["PATH"].startswith("/deps/venv/bin:")
+    assert "AWS_SECRET_ACCESS_KEY" not in options["env"]
+    assert candidate_runner.action_command("lint", dependency_env=True)[0] == "/deps/venv/bin/ruff"
 
 
 def test_command_runs_in_candidate_and_does_not_change_workspace(tmp_path, monkeypatch) -> None:

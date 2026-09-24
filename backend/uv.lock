@@ -190,12 +190,13 @@ wheels = [
 
 [[package]]
 name = "devflow-backend"
-version = "0.1.0"
+version = "0.2.0b1"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "langgraph" },
     { name = "langgraph-checkpoint-sqlite" },
+    { name = "packaging" },
     { name = "pydantic" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -212,6 +213,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115,<1" },
     { name = "langgraph", specifier = ">=1.0,<2" },
     { name = "langgraph-checkpoint-sqlite", specifier = ">=3,<4" },
+    { name = "packaging", specifier = ">=24,<27" },
     { name = "pydantic", specifier = ">=2.10,<3" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34,<1" },
 ]

@@ -3,14 +3,17 @@ from __future__ import annotations
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 
 import pytest
 from fastapi.testclient import TestClient
 from support import PassingRunner
 
 import devflow.coordinator as coordinator_module
-from devflow.main import create_app
+from devflow.main import create_app as _create_app
 from devflow.mock_provider import DeterministicMockProvider
+
+create_app = partial(_create_app, asynchronous=False, mode="mock", security_enabled=False)
 
 
 def app_for(tmp_path):

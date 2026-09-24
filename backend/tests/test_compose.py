@@ -22,14 +22,21 @@ def test_frontend_ci_installs_its_own_backend_before_e2e() -> None:
                for step in preparation), "E2E needs backend/.venv and installed backend dependencies"
 
 
-def test_backend_port_is_bound_to_loopback_by_default() -> None:
+def test_only_frontend_port_is_bound_to_loopback_by_default() -> None:
     compose_path = Path(__file__).parents[2] / "compose.yaml"
     if not compose_path.exists():
         pytest.skip("compose.yaml is not included in the backend runner image")
     compose = compose_path.read_text(encoding="utf-8")
 
-    assert '- "127.0.0.1:8000:8000"' in compose
-    assert '- "8000:8000"' not in compose
+    services = yaml.safe_load(compose)["services"]
+    assert not services["backend"].get("ports")
+    assert services["frontend"]["ports"] == ["127.0.0.1:${DEVFLOW_PORT:-3000}:3000"]
+    assert services["backend"]["environment"]["DEVFLOW_PUBLIC_ORIGIN"] == (
+        "http://127.0.0.1:${DEVFLOW_PORT:-3000}"
+    )
+    assert "devflow-secrets:/var/lib/devflow-secrets" in services["backend"]["volumes"]
+    assert all("devflow-secrets" not in str(volume)
+               for volume in services["runner-dispatcher"]["volumes"])
 
 
 def test_compose_dispatcher_owns_docker_socket_not_backend() -> None:
