@@ -2,12 +2,15 @@
 
 ## Status and distribution
 
-**Target: v0.2.0-beta.1 — PENDING validation.** This document describes the beta
-candidate setup and intended acceptance exercise. It does not announce a published
-release, tag, binary, container registry image, or successful hosted validation.
-Distribution is source: use the reviewed source checkout/archive and build locally.
-Do not run `git checkout v0.2.0-beta.1` unless the maintainers actually publish that tag.
+**v0.2.0-beta.1 — local, single-user source beta.** Use the tagged source/archive
+from the [GitHub Prerelease](https://github.com/CalvinL10/devflow/releases/tag/v0.2.0-beta.1)
+and build locally. No binary, desktop installer or container registry image is promised.
 The existing MIT license applies; preserve `LICENSE` when redistributing source.
+
+```bash
+git clone --branch v0.2.0-beta.1 https://github.com/CalvinL10/devflow.git
+cd devflow
+```
 
 ## Windows NTFS import limitation
 

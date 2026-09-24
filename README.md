@@ -5,9 +5,10 @@ snapshot, ask a Chat Completions-compatible provider for a change, inspect isola
 Python checks and review, then approve and export a patch. **Your original checkout
 is mounted read-only; approval does not apply changes to it.**
 
-**Beta target: v0.2.0-beta.1 — PENDING validation.** This is a source-distributed beta
-candidate, not a claim that a release/tag, hosted CI result, or supported binary exists.
-See [Beta setup and limitations](docs/BETA.md) and [release preparation](docs/GITHUB_RELEASE.md).
+**v0.2.0-beta.1 — source-distributed local beta.** No desktop installer or prebuilt
+registry image is provided. See [Beta setup and limitations](docs/BETA.md),
+[validation record](docs/GITHUB_RELEASE.md), and the
+[GitHub Prerelease](https://github.com/CalvinL10/devflow/releases/tag/v0.2.0-beta.1).
 
 **Stack:** Python 3.11 · FastAPI · LangGraph · SQLite · Next.js · React · Docker
 
