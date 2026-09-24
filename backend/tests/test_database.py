@@ -277,3 +277,33 @@ def test_incompatible_old_database_is_rejected_before_schema_or_data_changes(tmp
         assert list(connection.iterdump()) == before
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_additive_beta_migration_preserves_tasks_checkpoints_and_decisions(database):
+    create_run(database)
+    database.mark_awaiting_approval("run-1")
+    database.record_decision(decision_id="retained-decision", run_id="run-1", patch_revision=1,
+                             kind=DecisionKind.REJECT, feedback="retain me")
+    database.save_checkpoint_ref(run_id="run-1", thread_id="run-1", checkpoint_ns="", checkpoint_id="saved")
+    tables = ["runs", "patches", "run_artifacts", "run_events", "run_checkpoint_refs", "decisions"]
+    with database.connect() as connection:
+        connection.execute("DROP TABLE run_context")
+        connection.execute("PRAGMA user_version = 0")
+        before = {table: [tuple(row) for row in connection.execute(f"SELECT * FROM {table}")]
+                  for table in tables}
+    database.initialize()
+    database.initialize()
+    with database.connect() as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert {table: [tuple(row) for row in connection.execute(f"SELECT * FROM {table}")]
+                for table in tables} == before
+        assert connection.execute("SELECT * FROM run_context").fetchall() == []
+
+
+def test_newer_database_version_refused_without_downgrade(database):
+    with database.connect() as connection:
+        connection.execute("PRAGMA user_version = 2")
+    with pytest.raises(RuntimeError, match="newer"):
+        database.initialize()
+    with database.connect() as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2

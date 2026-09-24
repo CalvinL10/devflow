@@ -75,7 +75,10 @@ class Database:
                     "back up the database and workspace, then use a separate fresh database and "
                     "workspace or an explicitly reviewed migration. No automatic upgrade is supported."
                 )
-            connection.executescript(schema)
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            if version > 1:
+                raise RuntimeError("database is newer than this application; restore a matching backup")
+            connection.executescript("BEGIN IMMEDIATE;\n" + schema + "\nPRAGMA user_version = 1;\nCOMMIT;")
             now = utc_now()
             connection.execute(
                 """
@@ -109,12 +112,14 @@ class Database:
         candidate_dir: str,
         patch: dict[str, Any],
         task: str | None = None,
+        workspace_id: str = "default",
+        context: dict | None = None,
     ) -> sqlite3.Row:
         now = utc_now()
         try:
             with self.transaction() as connection:
                 workspace = connection.execute(
-                    "SELECT current_revision FROM workspaces WHERE id = 'default'"
+                    "SELECT current_revision FROM workspaces WHERE id = ?", (workspace_id,)
                 ).fetchone()
                 if workspace is None:
                     raise RuntimeError("default workspace is not initialized")
@@ -124,9 +129,9 @@ class Database:
                     INSERT INTO runs(
                         id, thread_id, workspace_id, base_workspace_revision,
                         status, created_at, updated_at
-                    ) VALUES (?, ?, 'default', ?, 'RUNNING', ?, ?)
+                    ) VALUES (?, ?, ?, ?, 'RUNNING', ?, ?)
                     """,
-                    (run_id, thread_id, base_revision, now, now),
+                    (run_id, thread_id, workspace_id, base_revision, now, now),
                 )
                 connection.execute(
                     """
@@ -145,6 +150,11 @@ class Database:
                         now,
                     ),
                 )
+                if context is not None:
+                    connection.execute(
+                        "INSERT INTO run_context(run_id, request_id, metadata_json) VALUES (?, ?, ?)",
+                        (run_id, context.get("request_id"), json.dumps(context)),
+                    )
                 self._append_event(
                     connection,
                     run_id=run_id,
@@ -162,6 +172,81 @@ class Database:
                 raise ActiveRunConflict("only one active run is allowed") from error
             raise
         return self.get_run(run_id)
+
+    def ensure_workspace(self, workspace_id: str) -> None:
+        with self.transaction() as connection:
+            now = utc_now()
+            connection.execute(
+                "INSERT INTO workspaces VALUES (?, 0, ?, ?) ON CONFLICT(id) DO NOTHING",
+                (workspace_id, now, now),
+            )
+
+    def context(self, run_id: str) -> dict:
+        with self.connect() as connection:
+            row = connection.execute("SELECT * FROM run_context WHERE run_id = ?", (run_id,)).fetchone()
+        if not row:
+            return {}
+        return {**json.loads(row["metadata_json"]), "stop_requested": bool(row["stop_requested"])}
+
+    def find_request(self, request_id: str) -> str | None:
+        with self.connect() as connection:
+            row = connection.execute("SELECT run_id FROM run_context WHERE request_id = ?", (request_id,)).fetchone()
+        return row[0] if row else None
+
+    def update_context(self, run_id: str, **values) -> None:
+        with self.transaction() as connection:
+            row = connection.execute("SELECT metadata_json FROM run_context WHERE run_id = ?", (run_id,)).fetchone()
+            if row:
+                metadata = {**json.loads(row[0]), **values}
+                connection.execute("UPDATE run_context SET metadata_json = ? WHERE run_id = ?", (json.dumps(metadata), run_id))
+
+    def request_stop(self, run_id: str) -> bool:
+        with self.transaction() as connection:
+            run = connection.execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()
+            if run is None:
+                raise KeyError(run_id)
+            row = connection.execute("SELECT stop_requested FROM run_context WHERE run_id = ?", (run_id,)).fetchone()
+            if row and row[0]:
+                return False
+            if run[0] not in ("CREATED", "RUNNING"):
+                raise InvalidRunTransition("stop requires a running task; use approval cancel otherwise")
+            if not row:
+                connection.execute("INSERT INTO run_context(run_id, metadata_json) VALUES (?, '{}')", (run_id,))
+            connection.execute("UPDATE run_context SET stop_requested = 1 WHERE run_id = ?", (run_id,))
+            self._append_event(connection, run_id=run_id, event_type="run.stop_requested", node=None, payload={})
+            return True
+
+    def execution_error(self, run_id: str, code: str, message: str, *, canceled: bool = False, finalize: bool = True) -> None:
+        with self.transaction() as connection:
+            row = connection.execute("SELECT metadata_json, stop_requested, error_json FROM run_context WHERE run_id = ?", (run_id,)).fetchone()
+            if not row:
+                return
+            phase = json.loads(row[0]).get("phase", "start")
+            error = None if canceled else json.dumps({"code": code, "message": message, "phase": phase})
+            # Retain the first stage failure, rather than replace it with a generic
+            # worker-exit diagnosis. Cleanup failures are actionable and take precedence.
+            if row[2] and not canceled and code != "cleanup_pending":
+                error = row[2]
+            connection.execute("UPDATE run_context SET error_json = ? WHERE run_id = ?", (error, run_id))
+            # A cancellation is finalized only by the supervisor after process/container cleanup.
+            if not finalize or (row[1] and not canceled):
+                return
+            target = "CANCELED" if canceled else "FAILED"
+            changed = connection.execute(
+                "UPDATE runs SET status = ?, updated_at = ? WHERE id = ? AND status IN ('CREATED','RUNNING')",
+                (target, utc_now(), run_id),
+            ).rowcount
+            if changed:
+                self._append_event(connection, run_id=run_id, event_type="run.canceled" if canceled else "run.failed",
+                                   node=phase, payload={} if canceled else {"code": code, "message": message})
+
+    def history(self, limit: int, offset: int) -> dict:
+        with self.connect() as connection:
+            ids = [row[0] for row in connection.execute(
+                "SELECT id FROM runs ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?", (limit + 1, offset),
+            )]
+        return {"runs": [self.snapshot(id) for id in ids[:limit]],
+                "next_offset": offset + limit if len(ids) > limit else None}
 
     def get_run(self, run_id: str) -> sqlite3.Row:
         with self.connect() as connection:
@@ -206,6 +291,11 @@ class Database:
 
     def mark_awaiting_approval(self, run_id: str) -> None:
         with self.transaction() as connection:
+            cancellation = connection.execute(
+                "SELECT stop_requested FROM run_context WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if cancellation and cancellation[0]:
+                raise InvalidRunTransition("run stop was requested")
             self.require_approval_evidence(run_id, connection=connection)
             self._transition(
                 connection,
@@ -316,6 +406,7 @@ class Database:
                 """
                 UPDATE runs SET status = 'FAILED', updated_at = ?
                 WHERE id = ? AND status = 'RUNNING'
+                AND NOT EXISTS (SELECT 1 FROM run_context WHERE run_context.run_id = runs.id AND stop_requested = 1)
                 """,
                 (utc_now(), run_id),
             )
@@ -811,7 +902,15 @@ class Database:
                 if pending is not None
                 else None
             )
+            context = connection.execute("SELECT * FROM run_context WHERE run_id = ?", (run_id,)).fetchone()
+            extra = {}
+            if context:
+                extra = json.loads(context["metadata_json"])
+                extra.pop("request_id", None)
+                extra["stop_requested"] = bool(context["stop_requested"])
+                extra["error"] = json.loads(context["error_json"]) if context["error_json"] else None
             return {
+                **extra,
                 "run_id": run["id"], "thread_id": run["thread_id"],
                 "workspace_revision": revision, "status": run["status"],
                 "base_workspace_revision": run["base_workspace_revision"],

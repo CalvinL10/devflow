@@ -10,6 +10,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing, contextmanager
+from functools import partial
 from pathlib import Path
 
 import httpx
@@ -20,8 +21,10 @@ from support import PassingRunner
 
 from devflow.database import Database
 from devflow.events import CursorError, EventStream, EventStreamResponse
-from devflow.main import create_app
+from devflow.main import create_app as _create_app
 from devflow.models import FilePatchSet
+
+create_app = partial(_create_app, asynchronous=False, mode="mock", security_enabled=False)
 
 
 def seed(database):

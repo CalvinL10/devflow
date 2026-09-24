@@ -21,8 +21,16 @@ ALLOWED_ACTIONS: dict[str, list[str]] = {
     "test": [
         "/app/.venv/bin/python",
         "-I",
-        "-m",
-        "pytest",
+        "-B",
+        "-c",
+        (
+            "import pathlib,sys;"
+            "import pytest;"
+            "root=pathlib.Path.cwd();"
+            "src=root/'src';"
+            "sys.path[:0]=[str(path) for path in (src,root) if path.is_dir()];"
+            "raise SystemExit(pytest.main(sys.argv[1:]))"
+        ),
         "-q",
         "-p",
         "no:cacheprovider",
@@ -30,11 +38,14 @@ ALLOWED_ACTIONS: dict[str, list[str]] = {
 }
 
 
-def action_command(action: str) -> list[str]:
+def action_command(action: str, *, dependency_env: bool = False) -> list[str]:
     try:
-        return list(ALLOWED_ACTIONS[action])
-    except KeyError as error:
+        command = list(ALLOWED_ACTIONS[action])
+    except (KeyError, TypeError) as error:
         raise ValueError(f"unsupported candidate action: {action}") from error
+    if dependency_env:
+        command[0] = "/deps/venv/bin/ruff" if action == "lint" else "/deps/venv/bin/python"
+    return command
 
 
 def execute(action: str, *, candidate_root: Path = CANDIDATE_ROOT, timeout_seconds: int = 60) -> CommandResult:
@@ -44,15 +55,17 @@ def execute(action: str, *, candidate_root: Path = CANDIDATE_ROOT, timeout_secon
     if not root.is_dir():
         raise ValueError("candidate root must be a directory")
     ManagedWorkspace._reject_links(root)
-    command = action_command(action)
+    prepared = os.environ.get("DEVFLOW_DEPENDENCY_ENV") == "1"
+    command = action_command(action, dependency_env=prepared)
     environment = {
-        "PATH": "/app/.venv/bin:/usr/local/bin:/usr/bin:/bin",
+        "PATH": ("/deps/venv/bin" if prepared else "/app/.venv/bin") + ":/usr/local/bin:/usr/bin:/bin",
         "LANG": "C.UTF-8",
         "LC_ALL": "C.UTF-8",
         "TZ": "UTC",
         "PYTHONDONTWRITEBYTECODE": "1",
         "DEVFLOW_LLM_PROVIDER": "mock",
         "LANGGRAPH_STRICT_MSGPACK": "true",
+        "HOME": "/tmp",
     }
     started = time.monotonic()
     timed_out = False
@@ -82,7 +95,7 @@ def execute(action: str, *, candidate_root: Path = CANDIDATE_ROOT, timeout_secon
 
 
 def _run_bounded(
-    command: list[str], *, cwd: Path, env: dict[str, str], timeout_seconds: int
+    command: list[str], *, cwd: Path, env: dict[str, str], timeout_seconds: float
 ) -> tuple[int, bytes, bytes, bool, bool]:
     process = subprocess.Popen(
         command,
@@ -121,12 +134,18 @@ def _run_bounded(
     except subprocess.TimeoutExpired:
         timed_out = True
         _kill_process(process)
-        process.wait()
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            # Never turn a bounded request into an unbounded wait on the client.
+            # Container lifecycle cleanup remains the dispatcher's responsibility.
+            pass
     finally:
         for reader in readers:
             reader.join(timeout=READER_JOIN_SECONDS)
 
-    return process.returncode, bytes(stdout), bytes(stderr), timed_out, output_limited.is_set()
+    return (process.returncode if process.returncode is not None else -1,
+            bytes(stdout), bytes(stderr), timed_out, output_limited.is_set())
 
 
 def _kill_process(process: subprocess.Popen) -> None:

@@ -11,10 +11,15 @@ ENV PATH="/app/.venv/bin:$PATH" \
     DEVFLOW_LLM_PROVIDER=mock
 
 WORKDIR /app
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd --gid 10001 devflow \
     && useradd --uid 10001 --gid devflow --no-create-home --shell /usr/sbin/nologin devflow \
-    && mkdir -p /var/lib/devflow \
-    && chown -R devflow:devflow /var/lib/devflow /app
+    && mkdir -p /var/lib/devflow /var/lib/devflow-secrets \
+    && chown -R devflow:devflow /var/lib/devflow /var/lib/devflow-secrets /app \
+    && chmod 700 /var/lib/devflow-secrets
 
 
 FROM base AS test
@@ -27,6 +32,7 @@ CMD ["pytest", "-q"]
 
 
 FROM base AS production
+ENV DEVFLOW_LLM_PROVIDER=chat_completions
 COPY --chown=devflow:devflow pyproject.toml uv.lock ./
 COPY --chown=devflow:devflow src ./src
 RUN uv sync --locked --no-dev --no-editable

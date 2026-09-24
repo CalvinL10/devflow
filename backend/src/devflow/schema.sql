@@ -95,3 +95,12 @@ CREATE TABLE IF NOT EXISTS workspace_publications (
     created_at TEXT NOT NULL,
     UNIQUE(workspace_id, revision)
 );
+
+-- Additive beta metadata; existing workflow and checkpoint tables retain their history.
+CREATE TABLE IF NOT EXISTS run_context (
+    run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+    request_id TEXT UNIQUE,
+    metadata_json TEXT NOT NULL,
+    stop_requested INTEGER NOT NULL DEFAULT 0 CHECK(stop_requested IN (0, 1)),
+    error_json TEXT
+);

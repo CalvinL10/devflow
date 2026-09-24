@@ -1,14 +1,16 @@
 import TaskLauncher from "../components/task-launcher";
 
-export default function HomePage() {
+export default async function HomePage({ searchParams }) {
+  const query = await searchParams;
+  const initialTask = typeof query?.task === "string" ? query.task.slice(0, 10000) : "";
   return (
     <main className="landing-shell">
       <section className="landing-copy">
-        <div className="eyebrow">DEVFLOW / CONTROL PLANE</div>
+        <div className="eyebrow">DEVFLOW / BETA</div>
         <h1>Ship changes with an explicit human decision.</h1>
         <p>
-          Start a deterministic backend run, inspect its persisted patch and evidence,
-          then approve, reject, or cancel without inventing client-side success.
+          Connect your provider, consent to sharing committed source, and follow a live run.
+          Review the evidence, approve a patch, and apply it yourself.
         </p>
         <div className="capability-row" aria-label="Workbench capabilities">
           <span>Durable events</span>
@@ -16,7 +18,7 @@ export default function HomePage() {
           <span>Read-only diff</span>
         </div>
       </section>
-      <TaskLauncher />
+      <TaskLauncher key={initialTask} initialTask={initialTask} />
     </main>
   );
 }

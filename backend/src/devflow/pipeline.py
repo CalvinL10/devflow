@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import MappingProxyType
 
 from devflow.database import Database
+from devflow.errors import DevFlowError
 from devflow.models import (
     CheckReport,
     FilePatchSet,
@@ -22,10 +23,20 @@ class RunPipeline:
 
     def node(self, name: str):
         def execute(state: WorkflowState):
+            if self.database.context(state.run_id).get("stop_requested"):
+                raise RuntimeError("execution stopped")
+            self.database.update_context(state.run_id, phase=name)
             self.database.append_node_event(state.run_id, name, "node.started", state.patch_revision)
             try:
                 result = getattr(self, name)(state)
-            except Exception:
+            except Exception as error:
+                self.database.execution_error(
+                    state.run_id,
+                    error.code if isinstance(error, DevFlowError) else "stage_failed",
+                    error.public_message if isinstance(error, DevFlowError)
+                    else "Stage failed; check supported project scope and stage reports.",
+                    finalize=False,
+                )
                 self.database.append_node_event(
                     state.run_id, name, "node.failed", state.patch_revision
                 )
@@ -39,7 +50,11 @@ class RunPipeline:
         return execute
 
     def plan(self, state: WorkflowState):
-        plan = TaskPlan.model_validate(self.provider.plan(state.task).model_dump())
+        if state.provider == "chat_completions":
+            result = self.provider.plan(state.task, self.workspace.read_revision(state.base_workspace_revision))
+        else:
+            result = self.provider.plan(state.task)
+        plan = TaskPlan.model_validate(result.model_dump())
         self.database.save_artifact(state.run_id, "plan", plan.model_dump(mode="json"))
         return {"plan": plan.model_dump(mode="json")}
 
@@ -70,7 +85,23 @@ class RunPipeline:
         return {}
 
     def lint_test(self, state: WorkflowState):
+        context = self.database.context(state.run_id)
+        if context.get("import_id"):
+            from devflow.dependencies import parse_dependencies
+            files = self.workspace._read_text_tree(self.workspace.candidate_path(state.run_id))
+            requirements = parse_dependencies(files, context.get("dependency_source"), context.get("extras", []))
+            self.database.update_context(state.run_id, phase="dependencies")
+            try:
+                environment = self.runner.prepare(self.workspace, state.run_id, requirements)
+            except Exception as error:
+                from devflow.errors import DependencyPreparationError
+                raise DependencyPreparationError from error
+            self.database.update_context(state.run_id, dependencies=environment, phase="lint_test")
+        if self.database.context(state.run_id).get("stop_requested"):
+            raise RuntimeError("execution stopped")
         lint = self.runner.run(self.workspace, state.run_id, "lint")
+        if self.database.context(state.run_id).get("stop_requested"):
+            raise RuntimeError("execution stopped")
         test = self.runner.run(self.workspace, state.run_id, "test")
         report = CheckReport(
             run_id=state.run_id, patch_revision=state.patch_revision,

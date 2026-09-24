@@ -1,0 +1,11 @@
+# Explicit mock mode. Requires Docker Compose 2.24.4+ for !override.
+# Use a separate project name (the scripts use devflow-demo).
+services:
+  backend:
+    environment:
+      DEVFLOW_LLM_PROVIDER: mock
+      DEVFLOW_PROJECT_PATH: ""
+    volumes: !override
+      - devflow-data:/var/lib/devflow
+      - devflow-secrets:/var/lib/devflow-secrets
+      - runner-control:/run/devflow

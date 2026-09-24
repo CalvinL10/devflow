@@ -1,46 +1,73 @@
-# GitHub release checklist
+# GitHub release preparation
 
-Use this checklist before sharing DevFlow on a resume. It separates repository work from
-settings that must be completed on GitHub.
+## Candidate status
 
-## Before the first public push
+**v0.2.0-beta.1 — PENDING validation.** This is the intended beta label, not a claim
+that the Git tag, GitHub release, source assets or hosted validation already exist.
+Do not create or advertise the release until its actual source revision has been reviewed
+and the maintainer has recorded the validation outcomes. This document does not create
+new CI requirements or change repository branch protection.
 
-- Review the complete diff and split it into understandable commits.
-- Confirm a clean checkout can follow the README startup path.
-- Run backend lint, frontend lint/unit/build, Playwright acceptance, and the opt-in Docker
-  or Compose workflow where the host supports them.
-- Choose and add a license. MIT is common for portfolio code; Apache-2.0 adds an explicit
-  patent grant. This is an owner decision and should not be inferred by tooling.
-- Remove local databases, caches, logs, Playwright output, and runtime workspaces from the
-  commit. The root `.gitignore` covers the expected paths.
-- Check the staged file list for secrets and machine-specific paths.
+## Source distribution
 
-## GitHub repository settings
+- Distribute the reviewed source revision with `README.md`, `docs/BETA.md`,
+  `compose.yaml`, `compose.demo.yaml`, both startup scripts, `.env.example`, both
+  application source trees and their lockfiles, Dockerfiles and existing `LICENSE`.
+- Keep the current **MIT license and copyright notice**. Do not replace it or ask users
+  to choose a new license as part of release preparation.
+- Exclude `.env`, local provider settings, databases, runtime volumes, backups, caches,
+  node modules, local virtual environments, test reports and machine-specific paths.
+- Do not package API keys, sample private code or real run exports. Review source and
+  asset contents without printing credential files into terminal logs.
+- No prebuilt binary, registry image or automatic updater is promised. Users build the
+  source with local Docker/Compose. Initial builds require internet access.
 
-- About description: `Durable human-in-the-loop code-change workflow with persisted SSE replay, constrained Docker checks, and recoverable workspace publication.`
-- Topics: `fastapi`, `langgraph`, `nextjs`, `sqlite`, `docker`, `sse`,
-  `human-in-the-loop`, `workflow-engine`, `playwright`, `reliability-engineering`.
-- Enable private vulnerability reporting so `SECURITY.md` has a confidential channel.
-- Add a 1280×640 social preview based on the workflow and architecture diagrams.
-- After the first successful hosted run, add a CI badge using the actual repository URL.
-- Optionally protect `main` and require the existing CI jobs. Do this only after confirming
-  their check names and successful hosted execution.
+## Validation record to complete
 
-## Evidence to capture
+Record the exact revision, platform/tool versions, command and result. Leave entries
+PENDING when they have not been exercised. A passing mock test is not real-provider
+validation, and a local run is not evidence of a successful hosted CI run.
 
-- Link one successful GitHub Actions run for the resume version.
-- Create a release or tag such as `v0.1.0-portfolio` only after the corresponding commit has
-  passed the chosen verification commands.
-- Add one real workbench screenshot or short GIF. Show the status, timeline, and diff without
-  exposing local paths, tokens, or personal data.
-- Keep the README statement about CI conservative until hosted evidence exists.
+- PENDING — clean source startup on Windows PowerShell + Docker Desktop Linux containers.
+- PENDING — clean source startup on Linux Bash + local Docker Engine.
+- PENDING — real provider setup/save/test, consent, import, background task, checks,
+  review, approve/reject, exported patch and manual `git apply --check`/apply.
+- PENDING — deterministic demo override without a project bind or API key; separate state.
+- PENDING — repository/no-HEAD and occupied-port startup diagnostics; dirty/unsupported
+  source rejection by safe import preview, without source status/index refresh or filters.
+- PENDING — backend has no published port or Docker socket; dispatcher has no credentials;
+  original project is read-only; local-origin security remains enabled.
+- PENDING — supported wheel-only dependency preparation and unsupported-source failures.
+- PENDING — stop during work, restart/reconnect, persisted run history and recovery.
+- PENDING — offline stop and consistent database/workspace backup, secret exclusion,
+  restore into a separate installation and post-restore inspection.
+- PENDING — ordinary backend tests/lint, frontend lint/unit/build and browser acceptance.
+- PENDING — actual GitHub Actions run linked for this revision, where available.
 
-## Recommended commit groups
+Use [BETA.md](BETA.md) for the Windows/Linux commands and operator limitations. Workflow
+changes belong to the CI maintainer; this checklist does not change `.github/workflows`.
 
-1. Runtime/recovery changes and their backend tests.
-2. Frontend behavior and Playwright/unit tests.
-3. Compose dispatcher and CI workflow.
-4. Portfolio documentation and repository hygiene.
+## Draft release notes
 
-Do not squash unrelated functional work into a documentation-only commit merely to make the
-history look smaller; reviewers benefit from a truthful, reviewable progression.
+> DevFlow v0.2.0-beta.1 is a source-distributed, local single-user beta candidate for
+> importing clean Python Git projects, configuring a Chat Completions-compatible provider,
+> reviewing isolated checks and approving/exporting changes. Real mode is the default;
+> deterministic mock mode is an explicit demo override. Approval does not write to the
+> original checkout. Apply the exported patch manually after independent review.
+>
+> Validation: PENDING. No release publication or live-provider compatibility is implied
+> by this draft. See BETA.md for setup, supported dependencies, security boundaries,
+> offline backup, manual recovery, and known limitations.
+
+Replace the validation paragraph only with measured results before publishing. List
+remaining limitations and known failures explicitly; do not claim broad production
+readiness, universal model compatibility, or a complete hostile-code sandbox.
+
+## GitHub publication (maintainer action)
+
+Review the final diff and source assets; retain confidential vulnerability reporting per
+`SECURITY.md`. Link actual validation evidence, then create the intended prerelease/tag
+only when the maintainer chooses to publish. Mark it as a prerelease and attach only
+reviewed source artifacts. Any screenshots must omit keys, private source, personal paths
+and prompt data. Update release links only after the release exists. Never fabricate a
+successful CI badge or a download URL for this candidate.

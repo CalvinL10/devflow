@@ -23,3 +23,8 @@ class InvalidRunTransition(DevFlowError):
 class RevisionConflict(DevFlowError):
     code = "revision_conflict"
     public_message = "the workspace or patch revision conflicts with this request"
+
+
+class DependencyPreparationError(DevFlowError):
+    code = "dependency_preparation_error"
+    public_message = "Supported wheel dependencies could not be prepared; verify public PyPI access and dependency compatibility."

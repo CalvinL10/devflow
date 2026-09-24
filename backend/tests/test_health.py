@@ -1,9 +1,13 @@
 import logging
+from functools import partial
 
 from fastapi.testclient import TestClient
 
 from devflow.errors import ActiveRunConflict
-from devflow.main import create_app
+from devflow.main import create_app as _create_app
+
+create_app = partial(_create_app, asynchronous=False, mode="mock", security_enabled=False)
+
 
 
 def test_health_reports_local_baseline(tmp_path) -> None:

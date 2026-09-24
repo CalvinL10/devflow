@@ -2,15 +2,18 @@
 from __future__ import annotations
 
 import os
+from functools import partial
 
 import pytest
 from fastapi.testclient import TestClient
 
 from devflow.candidate_runner import action_command
 from devflow.docker_runner import DockerCandidateRunner
-from devflow.main import create_app
+from devflow.main import create_app as _create_app
 from devflow.mock_provider import DeterministicMockProvider
 from devflow.models import CommandResult, FilePatch, FilePatchSet, TaskPlan
+
+create_app = partial(_create_app, asynchronous=False, mode="mock", security_enabled=False)
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("DEVFLOW_TEST_DOCKER") != "1",

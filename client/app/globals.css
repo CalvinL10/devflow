@@ -157,7 +157,34 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .spinner { width: 28px; height: 28px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+.landing-shell { display: block; width: min(1280px, 100%); margin: auto; padding: 48px 28px 80px; }
+.landing-copy { margin-bottom: 42px; }
+.landing-copy h1 { font-size: clamp(42px, 6vw, 76px); }
+.beta-flow { display: grid; gap: 24px; }
+.setup-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+.setup-panel, .run-context, .mode-banner { padding: 24px; min-width: 0; }
+.setup-panel h2, .run-context h2 { font-size: 20px; margin-top: 0; }
+.setup-panel p, .run-context p, .mode-banner p { color: var(--muted); line-height: 1.6; }
+.mode-banner { border: 1px solid var(--accent-2); background: #11231c; }
+.setup-panel fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.setup-panel label { display: block; margin: 18px 0 8px; }
+.setup-panel input:not([type="checkbox"]), .setup-panel select { width: 100%; padding: 11px; background: #090e0c; color: var(--ink); border: 1px solid #34423d; font: inherit; }
+.setup-panel .checkbox-row { display: flex; align-items: flex-start; gap: 9px; font-size: 14px; line-height: 1.6; }
+.checkbox-row input { margin-top: 6px; flex-shrink: 0; }
+.setup-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 18px 0; }
+.setup-panel button, .mode-banner button, .run-context button { border: 1px solid #52655c; background: #1a2b22; color: var(--ink); padding: 10px 14px; }
+.setup-panel a, .run-context a, .active-run-recovery a { color: var(--accent-2); }
+.preview-list { max-height: 200px; overflow: auto; padding-left: 24px; font: 12px/1.8 ui-monospace, monospace; }
+.commit-label, .history-list code, .run-context { overflow-wrap: anywhere; }
+.history-list { list-style: none; padding: 0; }
+.history-list li { display: grid; gap: 8px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.history-list span { color: var(--muted); font-size: 13px; }
+.run-context { margin-bottom: 24px; }
+.run-context pre { overflow: auto; padding: 14px; background: #080c0a; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 3px; }
+
 @media (max-width: 1100px) {
+  .setup-grid { grid-template-columns: 1fr; }
   .landing-shell, .run-summary, .workbench-grid, .evidence-grid { grid-template-columns: 1fr; }
   .decision-panel { grid-template-columns: 1fr; }
   .revision-grid { grid-template-columns: repeat(2, 1fr); }

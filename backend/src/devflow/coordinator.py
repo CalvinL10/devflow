@@ -27,7 +27,7 @@ class RunCoordinator:
 
     def __init__(
         self, database_path: Path | str, workspace_root: Path | str | None = None,
-        *, provider=None, runner=None,
+        *, provider=None, runner=None, recover=True,
     ):
         self.database = Database(database_path)
         self.database.initialize()
@@ -42,8 +42,9 @@ class RunCoordinator:
         )
         self._recovery_schedule_lock = threading.Lock()
         self._scheduled_recoveries: set[str] = set()
-        self._recover_incomplete_starts()
-        self._recover_incomplete_decisions()
+        if recover:
+            self._recover_incomplete_starts()
+            self._recover_incomplete_decisions()
 
     def start(
         self,
@@ -62,7 +63,7 @@ class RunCoordinator:
         candidate_path = self.workspace.candidate_path(run_id)
         if candidate_dir is not None:
             candidate_path = self.workspace.require_candidate_path(run_id, candidate_dir)
-        run = self.database.create_run(
+        self.database.create_run(
             run_id=run_id,
             thread_id=thread_id,
             patch_id=patch_id,
@@ -71,7 +72,28 @@ class RunCoordinator:
             patch={"files": []},
             task=task,
         )
+        return self.execute_existing(run_id)
+
+    def workspace_for(self, run_id: str) -> ManagedWorkspace:
+        workspace_id = self.database.get_run(run_id)["workspace_id"]
+        if workspace_id == "default":
+            return self.workspace
+        if workspace_id != run_id:
+            raise ValueError("invalid task workspace identity")
+        root = self.workspace.root.parent / workspace_id
+        return ManagedWorkspace(root, self.database)
+
+    def execute_existing(self, run_id: str, *, defer_finish: bool = False) -> dict[str, Any]:
+        run = self.database.get_run(run_id)
+        patch_row = self.database.current_patch(run_id)
+        patch_id = patch_row["id"]
+        patch_revision = patch_row["patch_revision"]
+        thread_id = run["thread_id"]
+        task = self.database.artifacts(run_id)["task"]
         try:
+            workspace = self.workspace_for(run_id)
+            pipeline = (self.pipeline if workspace is self.workspace else
+                        RunPipeline(self.database, workspace, self.pipeline.provider, self.pipeline.runner))
             state = WorkflowState(
                 run_id=run_id,
                 thread_id=thread_id,
@@ -79,9 +101,10 @@ class RunCoordinator:
                 patch_revision=patch_revision,
                 base_workspace_revision=int(run["base_workspace_revision"]),
                 task=task,
+                provider=self.database.context(run_id).get("provider", "mock"),
             )
             with open_graph(self.database.path) as checkpointer:
-                graph = build_graph(checkpointer, self.pipeline)
+                graph = build_graph(checkpointer, pipeline)
                 try:
                     result = invoke_start(graph, state, thread_id)
                 except Exception:
@@ -91,13 +114,21 @@ class RunCoordinator:
                     raise
                 self._save_checkpoint_ref(graph, run_id, thread_id)
             if result.get("status") == RunStatus.FAILED:
-                self.database.fail_run_start(run_id)
+                if defer_finish:
+                    self.database.update_context(run_id, execution_outcome="failed")
+                else:
+                    self.database.fail_run_start(run_id)
                 return self.snapshot(run_id)
             if "__interrupt__" not in result:
                 raise RuntimeError("workflow did not stop at the approval interrupt")
-            self.database.mark_awaiting_approval(run_id)
+            if defer_finish:
+                self.database.update_context(run_id, execution_outcome="approval")
+            else:
+                self.database.mark_awaiting_approval(run_id)
         except Exception:
-            self.database.fail_run_start(run_id)
+            self.database.execution_error(run_id, "execution_failed", "Execution failed; inspect the completed stage reports.", finalize=not defer_finish)
+            if not defer_finish:
+                self.database.fail_run_start(run_id)
             raise
         return self.snapshot(run_id)
 
@@ -121,7 +152,7 @@ class RunCoordinator:
             raise InvalidRunTransition("decisions require AWAITING_APPROVAL status")
         patch_set = FilePatchSet.model_validate_json(row["patch_json"])
         if kind is DecisionKind.APPROVE and RunStatus(run["status"]) is RunStatus.AWAITING_APPROVAL:
-            self.workspace.require_materialized_candidate(run_id, row["candidate_dir"])
+            self.workspace_for(run_id).require_materialized_candidate(run_id, row["candidate_dir"])
         _decision, _created = self.database.record_decision(
             decision_id=decision_id,
             run_id=run_id,
@@ -153,7 +184,7 @@ class RunCoordinator:
                 with open_graph(self.database.path) as checkpointer:
                     publish = None
                     if kind is DecisionKind.APPROVE:
-                        publish = lambda state: self.workspace.publish_patch(
+                        publish = lambda state: self.workspace_for(run_id).publish_patch(
                             decision_id=decision_id, owner_id=owner_id, run_id=run_id,
                             patch=state.patch or patch_set,
                         )
@@ -214,7 +245,7 @@ class RunCoordinator:
             return
         patch = self.database.get_patch(run_id, patch_revision)
         try:
-            self.workspace.require_materialized_candidate(run_id, patch["candidate_dir"])
+            self.workspace_for(run_id).require_materialized_candidate(run_id, patch["candidate_dir"])
         except Exception as error:
             self.database.fail_decision(
                 decision_id,
@@ -264,6 +295,8 @@ class RunCoordinator:
 
     def _recover_incomplete_starts(self) -> None:
         for run in self.database.list_runs_with_status(RunStatus.RUNNING):
+            if self.database.context(run["id"]).get("cleanup_pending"):
+                continue
             recovered = False
             try:
                 with open_graph(self.database.path) as checkpointer:
@@ -280,7 +313,7 @@ class RunCoordinator:
                         patch = self.database.get_patch(
                             run["id"], int(values["patch_revision"])
                         )
-                        self.workspace.require_materialized_candidate(
+                        self.workspace_for(run["id"]).require_materialized_candidate(
                             run["id"], patch["candidate_dir"]
                         )
                         self._save_checkpoint_ref(graph, run["id"], run["thread_id"])
@@ -371,7 +404,7 @@ class RunCoordinator:
                                     checkpointer,
                                     resume_guard=ensure_claim,
                                     publish=lambda state, decision_id=decision["decision_id"], owner_id=owner_id,
-                                        run_id=run["id"], patch_json=patch_row["patch_json"]: self.workspace.publish_patch(
+                                        run_id=run["id"], patch_json=patch_row["patch_json"]: self.workspace_for(run_id).publish_patch(
                                         decision_id=decision_id, owner_id=owner_id,
                                         run_id=run_id, patch=state.patch or FilePatchSet.model_validate_json(patch_json),
                                     ),
