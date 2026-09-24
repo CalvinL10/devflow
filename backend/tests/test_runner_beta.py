@@ -493,3 +493,13 @@ def test_threaded_server_accepts_stop_while_run_is_waiting(tmp_path):
         server.shutdown()
         server.server_close()
         serving.join(2)
+
+
+def test_network_container_forwards_only_standard_proxy_settings(monkeypatch, setup):
+    dispatcher, fake, _ = setup
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:8080")
+    monkeypatch.setenv("DEVFLOW_API_KEY", "must-not-forward")
+    dispatcher.prepare("run-proxy", ["Requests>=2"], "run-proxy")
+    download = next(c for c in fake.calls if "download" in c)
+    assert "--env=HTTPS_PROXY=http://proxy.invalid:8080" in download
+    assert not any("DEVFLOW_API_KEY" in item for item in download)
