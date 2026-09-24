@@ -1,5 +1,7 @@
 # DevFlow
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 DevFlow is a local-first, human-in-the-loop code-change workflow: import a clean Git
 snapshot, ask a Chat Completions-compatible provider for a change, inspect isolated
 Python checks and review, then approve and export a patch. **Your original checkout
@@ -190,8 +192,8 @@ npm run test:e2e
 ```
 
 Passing mock/unit tests does not establish live provider compatibility, end-to-end
-Docker behavior, Windows/Linux startup, or backup recovery. Those beta checks remain
-**PENDING** until the actual revision and results are recorded in the release notes.
+Docker behavior, Windows/Linux startup, or backup recovery. The recorded beta revision
+and results are documented in the [validation and release record](docs/GITHUB_RELEASE.md).
 
 ## License
 
