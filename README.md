@@ -11,6 +11,32 @@ See [Beta setup and limitations](docs/BETA.md) and [release preparation](docs/GI
 
 **Stack:** Python 3.11 · FastAPI · LangGraph · SQLite · Next.js · React · Docker
 
+## Windows NTFS import limitation
+
+**Direct Windows drive binds with synthetic executable bits are unsupported for
+real-project imports.** The tested `F:` mount exposes all five committed `100644`
+fixture files as `0777` inside `/project`, including `fixture.py` and
+`test_fixture.py`. The patched importer correctly rejects these mismatches.
+Successful startup or an earlier workflow run does not establish compatibility.
+Do not disable mode validation, trust `core.fileMode=false`, or chmod the user's
+source to force acceptance. Commit modes are preserved for export, not used to
+conceal dirty worktree modes.
+
+Use a fresh, mode-preserving Linux checkout, or WSL-native Linux storage such as
+`/home/<user>/projects` (not `/mnt/c` or `/mnt/f`). Launch Compose from that Linux
+environment only when Docker is already available there, and verify actual
+`/project` modes against the commit before import. On the diagnosed Windows host,
+both Ubuntu WSL distributions are installed but Docker integration is unavailable:
+**the WSL route remains unvalidated on this host**. Distribution installation alone
+is not evidence of Docker integration. User Docker settings are not changed
+automatically.
+
+Native Windows importer execution can check ordinary `100644` files, but rejects
+committed `100755` files because executable-bit verification is unavailable.
+The explicit no-import demo remains separate from real-project import support.
+The existing Ubuntu CI smoke checks the Linux fixture's mounted modes before
+import; it does not establish Windows NTFS support.
+
 ## Start real mode
 
 Install Git and Docker with Linux containers and Docker Compose **2.24.4 or newer**.
@@ -26,7 +52,8 @@ cleanliness. It deliberately does not run source-repository `git status` or refr
 index: clean filters can execute even with hooks and fsmonitor disabled. The safe,
 isolated import preview decides cleanliness and must accept the source before import.
 
-**Windows PowerShell** (Docker Desktop in Linux-container mode):
+**Windows PowerShell startup syntax** (Docker Desktop in Linux-container mode;
+the NTFS import limitation above still applies):
 
 ```powershell
 .\scripts\devflow.ps1 start -Repository 'C:\projects\my-python-project'

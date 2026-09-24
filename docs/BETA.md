@@ -9,6 +9,32 @@ Distribution is source: use the reviewed source checkout/archive and build local
 Do not run `git checkout v0.2.0-beta.1` unless the maintainers actually publish that tag.
 The existing MIT license applies; preserve `LICENSE` when redistributing source.
 
+## Windows NTFS import limitation
+
+**Direct Windows drive binds with synthetic executable bits are unsupported for
+real-project imports.** The tested `F:` mount exposes all five committed `100644`
+fixture files as `0777` inside `/project`, including `fixture.py` and
+`test_fixture.py`. The patched importer correctly rejects these mismatches.
+Successful startup or an earlier workflow run does not establish compatibility.
+Do not disable mode validation, trust `core.fileMode=false`, or chmod the user's
+source to force acceptance. Commit modes are preserved for export, not used to
+conceal dirty worktree modes.
+
+Use a fresh, mode-preserving Linux checkout, or WSL-native Linux storage such as
+`/home/<user>/projects` (not `/mnt/c` or `/mnt/f`). Launch Compose from that Linux
+environment only when Docker is already available there, and verify actual
+`/project` modes against the commit before import. On the diagnosed Windows host,
+both Ubuntu WSL distributions are installed but Docker integration is unavailable:
+**the WSL route remains unvalidated on this host**. Distribution installation alone
+is not evidence of Docker integration. User Docker settings are not changed
+automatically.
+
+Native Windows importer execution can check ordinary `100644` files, but rejects
+committed `100755` files because executable-bit verification is unavailable.
+The explicit no-import demo remains separate from real-project import support.
+The existing Ubuntu CI smoke checks the Linux fixture's mounted modes before
+import; it does not establish Windows NTFS support.
+
 ## Prerequisites
 
 - Windows with Docker Desktop using Linux containers and PowerShell 5.1+, or Linux
@@ -241,3 +267,17 @@ work/restart recovery; credential isolation; supported/unsupported wheel cases; 
 offline backup and restore; ordinary backend/frontend/E2E verification and actual hosted
 CI results. Record the exact source revision, platform and outcomes in release notes;
 never substitute historical mock evidence for these exercises.
+
+## Model request deadlines and cleanup failures
+
+The connection-test API uses a separate spawned process with a 30-second deadline
+(including DNS and worker startup), followed by bounded terminate/kill cleanup.
+Task model stages (`plan`, `code`, `review`) additionally have a supervised hard
+130-second limit, independent of transport socket timeouts. These are not automatic
+retry budgets. A timeout does not imply a remote provider refunded or stopped billing.
+
+If process/container cleanup cannot be confirmed, the task remains active and emits
+a persisted `run.cleanup_pending` event. Do not interpret this as canceled or safe to
+start another task. Retry stop/cleanup or restart the backend to reconcile managed
+resources; the UI continues to show the occupied task. Do not delete database rows
+or disable container cleanup to bypass the active-task constraint.

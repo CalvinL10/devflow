@@ -650,6 +650,7 @@ class ChatCompletionsProvider:
 
         Synchronous: run in an externally terminable worker for a hard deadline,
         not directly in a main-process request thread holding a supervisor lock.
+        API callers should use devflow.provider_probe.probe_provider(settings_root).
         """
         result = self._complete(
             'Reply with exactly {"ok":true}.', {"operation": "connection_test"},

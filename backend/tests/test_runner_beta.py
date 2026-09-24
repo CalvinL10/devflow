@@ -495,11 +495,11 @@ def test_threaded_server_accepts_stop_while_run_is_waiting(tmp_path):
         serving.join(2)
 
 
-def test_network_container_forwards_only_standard_proxy_settings(monkeypatch, setup):
+def test_single_file_log_rotation_disables_compression(setup):
     dispatcher, fake, _ = setup
-    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:8080")
-    monkeypatch.setenv("DEVFLOW_API_KEY", "must-not-forward")
-    dispatcher.prepare("run-proxy", ["Requests>=2"], "run-proxy")
-    download = next(c for c in fake.calls if "download" in c)
-    assert "--env=HTTPS_PROXY=http://proxy.invalid:8080" in download
-    assert not any("DEVFLOW_API_KEY" in item for item in download)
+    dispatcher.prepare("run-logs", [], "run-logs")
+    creates = [call for call in fake.calls if call[1] == "create"]
+    assert creates
+    for call in creates:
+        assert "--log-opt=max-file=1" in call
+        assert "--log-opt=compress=false" in call

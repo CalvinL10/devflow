@@ -20,7 +20,8 @@ pytestmark = pytest.mark.skipif(
     reason="requires an explicitly enabled Docker daemon and prebuilt runner image",
 )
 
-SCRIPT_HEADER = "#!/usr/bin/env python3\n" if os.name == "nt" else ""
+# Candidates are transferred as ordinary files, independent of host bind modes.
+SCRIPT_HEADER = ""
 
 
 class FixValueProvider(DeterministicMockProvider):

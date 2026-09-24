@@ -213,7 +213,7 @@ export default function RunWorkbench({ runId }) {
   }
 
   async function stop() {
-    if (pendingAction || snapshot?.stop_requested) return;
+    if (pendingAction || (snapshot?.stop_requested && !snapshot?.cleanup_pending)) return;
     setPendingAction("stop"); setActionError("");
     try { acceptSnapshot(await stopRun(runId)); }
     catch (cause) {
@@ -276,10 +276,11 @@ export default function RunWorkbench({ runId }) {
           {(snapshot.provider || healthProvider) === "mock" ? " · Demo mode — deterministic mock output, not a real model response." : " · No automatic mock fallback."}</p>
         <p>Source commit: <code>{snapshot.source_commit || "No imported source"}</code> · Import: {snapshot.import_id || "None"}</p>
         {["CREATED", "RUNNING"].includes(snapshot.status) ? <div>
-          <button data-testid="stop-button" type="button" disabled={Boolean(pendingAction) || snapshot.stop_requested} onClick={stop}>
-            {snapshot.stop_requested ? "Stop requested" : pendingAction === "stop" ? "Requesting stop…" : "Stop running task"}
+          <button data-testid="stop-button" type="button" disabled={Boolean(pendingAction) || (snapshot.stop_requested && !snapshot.cleanup_pending)} onClick={stop}>
+            {pendingAction === "stop" ? "Requesting stop…" : snapshot.cleanup_pending ? "Retry stop/cleanup" : snapshot.stop_requested ? "Stop requested" : "Stop running task"}
           </button>
-          <p role="status">{snapshot.stop_requested ? "Stopping at a safe execution boundary. Waiting for backend confirmation." : "Run is in progress. Stop requests execution cancellation; it is separate from canceling an approval."}</p>
+          {snapshot.cleanup_pending ? <p className="error-banner" role="alert" data-testid="cleanup-warning">Cleanup pending: containers have not been confirmed stopped. This run still occupies the running slot. Retry stop/cleanup or restart the backend to retry cleanup; wait for backend confirmation before starting another run.</p>
+            : <p role="status">{snapshot.stop_requested ? "Stopping at a safe execution boundary. Waiting for backend confirmation." : "Run is in progress. Stop requests execution cancellation; it is separate from canceling an approval."}</p>}
         </div> : null}
         {snapshot.error ? <p className="error-banner" role="alert"><strong>{snapshot.error.code}</strong> · {snapshot.error.phase || "run"}: {snapshot.error.message}</p> : null}
         {["FAILED", "REJECTED"].includes(snapshot.status) ? <Link href={newTaskUrl(snapshot.task)}>Copy to new task</Link> : null}

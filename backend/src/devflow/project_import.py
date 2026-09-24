@@ -3,6 +3,15 @@
 Only ordinary repositories with a private .git directory are supported. Linked
 worktrees, submodules, sparse/split indexes and non-byte-identical (filtered or
 newline-converted) checkouts may be rejected rather than invoking source config.
+
+Platform boundary: Linux must expose each tracked file's real executable bit.
+Windows drive binds which synthesize 0777 for committed 100644 files are rejected.
+For Docker hosted on Windows, use a fresh checkout on a WSL-native Linux filesystem
+(not /mnt/c or /mnt/f), launch Compose from that environment, and verify the mounted
+modes match the commit. Native Windows can verify ordinary 100644 files but cannot
+verify 100755 executable files; those imports require a mode-preserving Linux mount.
+Commit modes remain the snapshot/export authority, not a reason to skip dirty-mode
+validation. Source core.fileMode and safe.directory overrides are never trusted.
 """
 
 from __future__ import annotations
@@ -14,6 +23,7 @@ import stat
 import subprocess
 import tempfile
 import threading
+import time
 import tomllib
 from contextlib import contextmanager
 from pathlib import Path
@@ -23,6 +33,8 @@ from devflow.models import MAX_FILE_BYTES, validate_file_path
 
 MAX_TREE_BYTES = 16 * 1024 * 1024
 MAX_FILES = 1000
+MAX_SCAN_ENTRIES = 4000
+MAX_SCAN_SECONDS = 30
 MAX_GIT_OUTPUT = 2 * 1024 * 1024
 MAX_SNAPSHOT_BYTES = 6 * MAX_TREE_BYTES + 2 * MAX_GIT_OUTPUT
 # Explicit, case-insensitive exclusions, at any directory depth. Exclusions are
@@ -181,6 +193,7 @@ def _git(
     env: dict[str, str] | None = None,
     data: bytes | None = None,
     limit: int = MAX_GIT_OUTPUT,
+    accepted_codes: tuple[int, ...] = (0,),
 ) -> bytes:
     """Bound stdout and wall time; never invoke a shell or inherit Git config."""
     command = [
@@ -228,7 +241,7 @@ def _git(
                 if len(output) > limit:
                     process.kill()
                     raise ValueError("Git output exceeds import/export limits")
-                if process.wait() != 0:
+                if process.wait() not in accepted_codes:
                     raise ValueError(f"Git command failed: {args[0]}")
                 return output
             finally:
@@ -286,6 +299,96 @@ def _read_head(repository: Path) -> str:
     if not _COMMIT.fullmatch(value):
         raise ValueError("HEAD is not a supported direct commit reference")
     return value
+
+
+def _check_worktree_mode(path: Path, committed_mode: str) -> None:
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError("working tree entry is not a regular file")
+    # Windows native stat has no POSIX executable bit. Do not claim a clean
+    # executable checkout there. Linux bind mounts DO expose a bit, but 0777
+    # may be synthetic: reject mismatches rather than trusting source fileMode
+    # configuration or silently discarding a real chmod change.
+    if os.name == "nt":
+        if committed_mode == "100755":
+            raise ValueError("executable mode verification is unsupported on native Windows")
+    elif bool(info.st_mode & stat.S_IXUSR) != (committed_mode == "100755"):
+        raise ValueError(
+            "working tree executable mode differs from commit; synthetic Windows "
+            "bind mount modes are unsupported (use a mode-preserving checkout)"
+        )
+
+
+def _untracked_files(repo: Path, isolated: Path, tracked: set[str]) -> list[str]:
+    """Bound directory traversal, pruning ignored/generated dirs without following links.
+
+    Only repository .gitignore and info/exclude data are honored. User/system
+    excludes and source configuration are deliberately not read. Git evaluates
+    patterns in a temporary mirror, never against the source worktree/index.
+    """
+    visited = 0
+    ignore_bytes = 0
+    deadline = time.monotonic() + MAX_SCAN_SECONDS
+    observed = {}
+
+    def copy_ignore(source: Path, destination: Path) -> None:
+        nonlocal ignore_bytes
+        if not source.exists() and not source.is_symlink():
+            return
+        data = _read_file(source, MAX_FILE_BYTES)
+        ignore_bytes += len(data)
+        if ignore_bytes > MAX_TREE_BYTES:
+            raise ValueError("ignore data exceeds 16 MiB")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(data)
+        observed[source] = data
+
+    copy_ignore(repo / ".git" / "info" / "exclude", isolated / ".git" / "info" / "exclude")
+    pending = [""]
+    extras = []
+    while pending:
+        relative = pending.pop()
+        directory = repo / relative
+        _safe_path(directory)
+        copy_ignore(directory / ".gitignore", isolated / relative / ".gitignore")
+        items = []
+        with os.scandir(directory) as iterator:
+            for item in iterator:
+                visited += 1
+                if visited > MAX_SCAN_ENTRIES or time.monotonic() > deadline:
+                    raise ValueError("working tree scan exceeds bounded entry/time limits")
+                if not relative and item.name == ".git":
+                    continue
+                path = f"{relative}/{item.name}" if relative else item.name
+                validate_file_path(path)
+                _safe_path(repo / path)
+                is_directory = item.is_dir(follow_symlinks=False)
+                if not is_directory and not item.is_file(follow_symlinks=False):
+                    raise ValueError(f"{path}: unsupported working tree entry")
+                # Excluded tracked entries have already been byte/mode checked.
+                if _excluded(path) or (is_directory and item.name.casefold() in EXCLUDED_DIRS):
+                    continue
+                items.append((path, is_directory))
+        if not items:
+            continue
+        queries = [path + ("/" if is_dir else "") for path, is_dir in items]
+        ignored = set(_git(
+            isolated, "check-ignore", "--no-index", "-z", "--stdin",
+            data=b"\0".join(path.encode("utf-8") for path in queries) + b"\0",
+            accepted_codes=(0, 1),
+        ).decode("utf-8").split("\0"))
+        for (path, is_dir), query in zip(items, queries, strict=True):
+            if query in ignored:
+                continue
+            if is_dir:
+                (isolated / path).mkdir(parents=True, exist_ok=True)
+                pending.append(path)
+            elif path not in tracked:
+                extras.append(path)
+    for path, data in observed.items():
+        if _read_file(path, MAX_FILE_BYTES) != data:
+            raise ValueError("ignore rules changed during preview")
+    return extras
 
 
 def _validate_paths(paths) -> None:
@@ -376,10 +479,8 @@ class ProjectImporter:
                     if kind != b"blob" or mode not in {"100644", "100755"}:
                         result["errors"].append(f"{path}: links/submodules or unsupported mode")
                         continue
-                    _safe_path(repo / path)
                     if _excluded(path):
                         result["excluded"].append(path)
-                        continue
                     total += int(size)
                     if total > MAX_TREE_BYTES:
                         raise ValueError("tree exceeds 16 MiB")
@@ -389,13 +490,16 @@ class ProjectImporter:
                         data = _git(
                             isolated, "cat-file", "blob", oid, env=env, limit=MAX_FILE_BYTES
                         )
+                        if _read_file(repo / path, MAX_FILE_BYTES) != data:
+                            raise ValueError("working tree differs from committed bytes")
+                        _check_worktree_mode(repo / path, mode)
+                        if _excluded(path):
+                            continue
                         text = data.decode("utf-8")
                         if "\x00" in text:
                             raise ValueError("binary files are unsupported")
                         files[path] = text
                         modes[path] = mode
-                        if _read_file(repo / path, MAX_FILE_BYTES) != data:
-                            raise ValueError("working tree differs from committed bytes")
                     except (ValueError, OSError) as error:
                         result["errors"].append(f"{path}: {error}")
                 _validate_texts(files)
@@ -411,19 +515,8 @@ class ProjectImporter:
                 )
                 if sorted(staged.split(b"\0")) != sorted(expected.split(b"\0")):
                     result["errors"].append("repository has staged changes or an unsupported index")
-                # Do not ask Git to inspect a bind-mounted work tree: ownership
-                # checks are correct there and safe.directory must not be weakened.
-                # Tracked bytes were already compared above. Enumerate extra files
-                # ourselves with the same symlink/path checks and exclusions.
-                tracked = {entries_path for entries_path, *_ in entries}
-                for item in repo.rglob("*"):
-                    if not item.is_file() or ".git" in item.relative_to(repo).parts:
-                        continue
-                    path = item.relative_to(repo).as_posix()
-                    if path in tracked or _excluded(path):
-                        continue
-                    validate_file_path(path)
-                    _safe_path(item)
+                tracked = {entry[0] for entry in entries}
+                for path in _untracked_files(repo, isolated, tracked):
                     result["errors"].append(f"{path}: untracked file")
                 current_index = (
                     _read_file(repo / ".git" / "index", MAX_GIT_OUTPUT)

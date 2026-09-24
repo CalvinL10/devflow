@@ -29,13 +29,13 @@ jobs:
           tests/test_database.py tests/test_workspace.py tests/test_staging.py
           tests/test_compose.py tests/test_docker_runner.py tests/test_provider.py
           tests/test_project_import.py tests/test_patch_export.py tests/test_dependencies.py
-          tests/test_runner_beta.py
+          tests/test_runner_beta.py tests/test_provider_probe.py
       - name: Backend integration tests
         run: >-
           uv run --locked pytest -q -p no:cacheprovider
           tests/test_health.py tests/test_approval_api.py tests/test_events.py
           tests/test_pipeline.py tests/test_workflow_restart.py
-          tests/test_publication_recovery.py tests/test_async_api.py
+          tests/test_publication_recovery.py tests/test_async_api.py tests/test_supervisor_beta.py
 
   frontend:
     runs-on: ubuntu-latest
@@ -117,5 +117,7 @@ jobs:
           }
           trap cleanup EXIT
           "${compose[@]}" up --build --detach --wait --wait-timeout 180
+          # Check the container mount, not just host chmod or source Git config.
+          "${compose[@]}" exec -T backend python -c 'import stat; from pathlib import Path; names = ("src/fixture.py", "test_fixture.py", "devflow_task.py", "test_devflow_task.py", "pyproject.toml"); modes = {name: stat.S_IMODE((Path("/project") / name).stat().st_mode) for name in names}; print("Mounted fixture modes:", {name: oct(mode) for name, mode in modes.items()}); raise SystemExit(0 if all(mode == 0o644 for mode in modes.values()) else "Fixture mount must preserve committed 100644 modes; synthetic NTFS modes are unsupported")'
           python3 scripts/ci-compose-smoke.py verify --fixture "$DEVFLOW_PROJECT_PATH" --timeout 360
 

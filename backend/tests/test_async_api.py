@@ -167,3 +167,43 @@ def test_security_and_no_validation_secret_echo(tmp_path):
         assert response.status_code == 422
         assert "private-key-never-return" not in response.text
         assert not client.get("/api/settings/provider").json()["key_configured"]
+
+
+def test_connection_test_uses_bounded_probe_and_safe_errors(tmp_path, monkeypatch):
+    from devflow.provider import ProviderTimeoutError
+
+    calls = []
+
+    def probe(root):
+        calls.append(root)
+        return {"ok": True}
+
+    monkeypatch.setattr("devflow.provider_probe.probe_provider", probe)
+    app = app_for(tmp_path)
+    with TestClient(app) as client:
+        response = client.post("/api/settings/provider/test")
+        assert response.status_code == 200
+        assert response.json() == {"ok": True}
+        assert calls == [app.state.settings.root]
+
+        def timeout(root):
+            raise ProviderTimeoutError()
+
+        monkeypatch.setattr("devflow.provider_probe.probe_provider", timeout)
+        response = client.post("/api/settings/provider/test")
+        assert response.status_code >= 400
+        assert response.json()["error"]["code"] == "provider_timeout_error"
+
+
+def test_connection_test_cannot_start_while_task_active(tmp_path, monkeypatch):
+    def forbidden(root):
+        raise AssertionError("probe must not run during an active task")
+
+    monkeypatch.setattr("devflow.provider_probe.probe_provider", forbidden)
+    with TestClient(app_for(tmp_path, provider=SlowProvider())) as client:
+        run_id = client.post(
+            "/api/runs", json={"task": "slow", "request_id": "probe-busy"}
+        ).json()["run_id"]
+        assert client.post("/api/settings/provider/test").status_code == 409
+        client.post(f"/api/runs/{run_id}/stop")
+        wait_status(client, run_id, {"CANCELED"})

@@ -3,6 +3,8 @@
 prepare creates a new disposable Git project; verify never edits that project.
 The workflow supplies mock mode with an environment-only temporary override.
 No provider keys, demo overlay, host runner, or backend published port is used.
+The CI workflow separately verifies Linux file modes inside the backend mount;
+this host-side script cannot establish container mount modes from host stat.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import time
@@ -25,16 +28,22 @@ TASK = "CI production Compose import and approval proof"
 FIXTURE = {
     "pyproject.toml": (
         '[project]\nname = "devflow-ci-fixture"\nversion = "0.0.1"\n'
-        'dependencies = []\n\n[tool.pytest.ini_options]\npythonpath = ["."]\n'
+        'dependencies = ["colorama==0.4.6"]\n'
     ),
-    "fixture.py": "def answer():\n    return 42\n",
+    "src/fixture.py": "def answer():\n    return 42\n",
     "test_fixture.py": (
-        "import os\nfrom pathlib import Path\n\nfrom fixture import answer\n\n\n"
+        "import os\nimport socket\nfrom pathlib import Path\n\nimport colorama\nimport pytest\n\nfrom fixture import answer\n\n\n"
         "def test_fixture_runs_in_candidate_container():\n"
         "    assert answer() == 42\n"
+        "    assert colorama.__version__ == '0.4.6'\n"
         "    assert os.getuid() == 10001\n"
         "    assert Path.cwd() == Path('/candidate')\n"
         "    assert not Path('/var/run/docker.sock').exists()\n"
+        "    assert not Path('/var/lib/devflow-secrets').exists()\n"
+        "    with pytest.raises(OSError):\n"
+        "        socket.create_connection(('1.1.1.1', 53), timeout=0.1)\n"
+        "    with pytest.raises(OSError):\n"
+        "        Path('/candidate/unauthorized').write_text('no')\n"
     ),
     "devflow_task.py": "def task_goal():\n    return 'Original committed fixture'\n",
     "test_devflow_task.py": (
@@ -92,6 +101,7 @@ def prepare(fixture: Path) -> None:
     fixture.mkdir(parents=True, mode=0o755)
     for name, text in FIXTURE.items():
         path = fixture / name
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(text.encode())
         path.chmod(0o644)
     git(fixture, "init", "--quiet", "--template=", "--initial-branch=main")
@@ -213,7 +223,9 @@ def wait_run(api: API, run_id: str, wanted: str, timeout: float) -> dict:
 def source_state(root: Path) -> dict:
     # Byte/stat comparison, not a new hash algorithm or persisted baseline.
     return {
-        p.relative_to(root).as_posix(): (p.read_bytes(), p.stat().st_mtime_ns)
+        p.relative_to(root).as_posix(): (
+            p.read_bytes(), p.stat().st_mtime_ns, stat.S_IMODE(p.stat().st_mode)
+        )
         for p in root.rglob("*")
         if p.is_file()
     }
@@ -232,8 +244,16 @@ def check_commands(run: dict) -> None:
         "test": [
             "/deps/venv/bin/python",
             "-I",
-            "-m",
-            "pytest",
+            "-B",
+            "-c",
+            (
+                "import pathlib,sys;"
+                "import pytest;"
+                "root=pathlib.Path.cwd();"
+                "src=root/'src';"
+                "sys.path[:0]=[str(path) for path in (src,root) if path.is_dir()];"
+                "raise SystemExit(pytest.main(sys.argv[1:]))"
+            ),
             "-q",
             "-p",
             "no:cacheprovider",
@@ -312,6 +332,29 @@ def check_patch(fixture: Path, commit: str, patch: dict, exported: bytes) -> Non
             "Downloaded patch: git apply --check and git apply passed; exact bytes match",
             flush=True,
         )
+
+
+def cleanup_run(api: API, run_id: str) -> None:
+    # Read the current revision: approval-stage runs cannot use supervisor stop.
+    # One retry handles a run reaching approval between this read and stop.
+    for attempt in range(2):
+        run = api.json(f"/api/runs/{run_id}")
+        require(run.get("run_id") == run_id, "cleanup returned a different run")
+        if run.get("status") in {"FAILED", "CANCELED", "CANCELLED", "REJECTED", "COMPLETE"}:
+            return
+        try:
+            if run.get("status") == "AWAITING_APPROVAL":
+                api.json(
+                    f"/api/runs/{run_id}/cancel",
+                    method="POST",
+                    body={"decision_id": str(uuid4()), "patch_revision": run["patch_revision"]},
+                )
+            else:
+                api.request(f"/api/runs/{run_id}/stop", method="POST")
+            return
+        except RuntimeError:
+            if attempt == 1:
+                raise
 
 
 def verify(fixture: Path, timeout: float) -> None:
@@ -415,9 +458,9 @@ def verify(fixture: Path, timeout: float) -> None:
     finally:
         if run_id is not None and not complete:
             try:
-                api.request(f"/api/runs/{run_id}/stop", method="POST")
-            except (OSError, RuntimeError) as error:
-                print(f"Could not stop failed smoke run: {error}", flush=True)
+                cleanup_run(api, run_id)
+            except (OSError, ValueError, RuntimeError) as error:
+                print(f"Could not clean up failed smoke run: {error}", flush=True)
         require(
             source_state(fixture) == before,
             "smoke changed the mounted original repository",

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -33,10 +32,6 @@ class DeterministicMockProvider:
                 f"def test_task_goal():\n    assert task_goal() == {plan.goal!r}\n"
             ),
         }
-        # Docker Desktop exposes Windows bind-mounted files as executable.
-        # Generate valid script headers there rather than disabling lint rules.
-        if os.name == "nt":
-            contents = {path: "#!/usr/bin/env python3\n" + text for path, text in contents.items()}
         return FilePatchSet(
             run_id=run_id, patch_revision=patch_revision,
             base_workspace_revision=base_workspace_revision,

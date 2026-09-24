@@ -203,7 +203,8 @@ def create_app(
     def test_settings(request: Request):
         with request.app.state.supervisor.lock:
             request.app.state.supervisor.require_idle()
-            return safe_call(lambda: request.app.state.settings.provider().test())
+            from devflow.provider_probe import probe_provider
+            return safe_call(lambda: probe_provider(request.app.state.settings.root))
 
     @app.get("/api/project/preview")
     def project_preview(request: Request):

@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 
 import pytest
@@ -237,6 +238,9 @@ def test_exact_file_limit_and_executable_mode(repository, tmp_path):
     git(repository, "commit", "--quiet", "-m", "executable")
     instance = importer(repository, tmp_path)
     preview = instance.preview()
+    if os.name == "nt":
+        assert any("mode verification is unsupported" in error for error in preview["errors"])
+        return
     assert preview["errors"] == []
     metadata = instance.create(preview["commit"])
     assert metadata["modes"]["hello.py"] == "100755"
@@ -323,3 +327,140 @@ def test_source_git_config_never_loaded(repository, tmp_path, monkeypatch, head_
     preview = importer(repository, tmp_path).preview()
     assert preview["errors"] == []
     assert preview["commit"] == expected
+
+
+@pytest.mark.parametrize("path", [".env", "dist/output.bin"])
+@pytest.mark.parametrize("change", ["bytes", "deleted", "assume", "skip", "staged"])
+def test_excluded_tracked_files_must_be_clean(repository, tmp_path, path, change):
+    target = repository / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"original\0binary")
+    commit(repository)
+    assert importer(repository, tmp_path).preview()["errors"] == []
+    if change == "deleted":
+        target.unlink()
+    else:
+        target.write_bytes(b"changed")
+        if change == "staged":
+            git(repository, "add", "--", path)
+        elif change in {"assume", "skip"}:
+            git(repository, "update-index", "--assume-unchanged" if change == "assume"
+                else "--skip-worktree", path)
+    before = source_state(repository)
+    assert importer(repository, tmp_path).preview()["errors"]
+    assert source_state(repository) == before
+
+
+@pytest.mark.skipif(os.name == "nt", reason="native Windows has no executable bit")
+@pytest.mark.parametrize("name", ["hello.py", ".env"])
+@pytest.mark.parametrize("mode", [0o755, 0o777])
+def test_real_or_synthetic_executable_mismatch_is_explicit(repository, tmp_path, name, mode):
+    target = repository / name
+    if not target.exists():
+        target.write_bytes(b"secret")
+        commit(repository)
+    target.chmod(mode)
+    # Source core.filemode=false cannot conceal a changed bit.
+    errors = importer(repository, tmp_path).preview()["errors"]
+    assert any("executable mode differs" in error for error in errors)
+
+
+def test_bounded_ignore_walk_and_negations(repository, tmp_path):
+    (repository / ".gitignore").write_text("ignored/\n*.log\n!keep.log\n")
+    (repository / "sub").mkdir()
+    (repository / "sub" / ".gitignore").write_text("*.tmp\n!keep.tmp\n")
+    commit(repository)
+    (repository / "ignored").mkdir()
+    (repository / "ignored" / "anything").write_text("ignored")
+    (repository / "debug.log").write_text("ignored")
+    (repository / "sub" / "debug.tmp").write_text("ignored")
+    assert importer(repository, tmp_path).preview()["errors"] == []
+    (repository / "keep.log").write_text("untracked")
+    (repository / "sub" / "keep.tmp").write_text("untracked")
+    errors = importer(repository, tmp_path).preview()["errors"]
+    assert any("keep.log: untracked" in error for error in errors)
+    assert any("sub/keep.tmp: untracked" in error for error in errors)
+
+
+def test_info_exclude_but_not_source_config_excludes(repository, tmp_path):
+    (repository / ".git" / "info").mkdir(exist_ok=True)
+    (repository / ".git" / "info" / "exclude").write_text("local.tmp\n")
+    (repository / "local.tmp").write_text("ignored")
+    outside = tmp_path / "global-ignore"
+    outside.write_text("hidden.tmp\n")
+    git(repository, "config", "core.excludesFile", str(outside))
+    (repository / "hidden.tmp").write_text("must not trust source config")
+    errors = importer(repository, tmp_path).preview()["errors"]
+    assert errors == ["hidden.tmp: untracked file"]
+
+
+def test_scan_is_bounded_even_for_empty_directories(repository, tmp_path, monkeypatch):
+    import devflow.project_import as module
+    monkeypatch.setattr(module, "MAX_SCAN_ENTRIES", 8)
+    for index in range(12):
+        (repository / f"dir-{index}").mkdir()
+    assert any("scan exceeds" in error for error in importer(repository, tmp_path).preview()["errors"])
+
+
+def test_excluded_and_ignored_directories_are_not_descended(repository, tmp_path, monkeypatch):
+    import devflow.project_import as module
+    (repository / ".gitignore").write_text("ignored/\n")
+    commit(repository)
+    for name in ["node_modules", "ignored"]:
+        directory = repository / name
+        directory.mkdir()
+        for index in range(20):
+            (directory / str(index)).mkdir()
+    monkeypatch.setattr(module, "MAX_SCAN_ENTRIES", 8)
+    assert importer(repository, tmp_path).preview()["errors"] == []
+
+
+def test_untracked_directory_symlink_is_not_followed(repository, tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    try:
+        (repository / "linked").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    assert any("links" in error for error in importer(repository, tmp_path).preview()["errors"])
+
+
+def test_ignored_tracked_file_cannot_hide_dirty_bytes(repository, tmp_path):
+    (repository / "tracked.log").write_bytes(b"committed")
+    commit(repository)
+    (repository / ".gitignore").write_text("*.log\n")
+    commit(repository)
+    (repository / "tracked.log").write_bytes(b"changed")
+    errors = importer(repository, tmp_path).preview()["errors"]
+    assert any("tracked.log: working tree differs" in error for error in errors)
+
+
+def test_excluded_tracked_size_is_bounded(repository, tmp_path):
+    (repository / ".env").write_bytes(b"x" * (MAX_FILE_BYTES + 1))
+    commit(repository)
+    errors = importer(repository, tmp_path).preview()["errors"]
+    assert any(".env: file exceeds" in error for error in errors)
+
+@pytest.mark.parametrize("change", ["intent", "empty_delete", "mode"])
+def test_index_only_changes_rejected_without_source_refresh(repository, tmp_path, change):
+    if change == "intent":
+        (repository / "new-empty").write_bytes(b"")
+        git(repository, "add", "--intent-to-add", "new-empty")
+    elif change == "empty_delete":
+        (repository / "empty").write_bytes(b"")
+        commit(repository)
+        git(repository, "rm", "--cached", "empty")
+    else:
+        git(repository, "update-index", "--chmod=+x", "hello.py")
+    before = source_state(repository)
+    errors = importer(repository, tmp_path).preview()["errors"]
+    assert any("staged changes" in error for error in errors)
+    assert source_state(repository) == before
+
+
+def test_oversized_ignore_file_is_rejected(repository, tmp_path):
+    (repository / ".git" / "info").mkdir(exist_ok=True)
+    (repository / ".git" / "info" / "exclude").write_bytes(b"x" * (MAX_FILE_BYTES + 1))
+    before = source_state(repository)
+    assert importer(repository, tmp_path).preview()["errors"]
+    assert source_state(repository) == before

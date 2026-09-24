@@ -8,6 +8,37 @@ Do not create or advertise the release until its actual source revision has been
 and the maintainer has recorded the validation outcomes. This document does not create
 new CI requirements or change repository branch protection.
 
+## Local validation log — 2026-09-24 (not release approval)
+
+Work continues on `cd/devflow-v0.2-beta`; no tag or Prerelease has been created.
+These results describe local working-tree checks, not a successful final SHA in CI.
+
+- PASS — backend suite excluding the opt-in Docker module: **644 passed, 6 skipped**,
+  with one upstream Starlette/AnyIO deprecation warning. Command:
+  `backend/.venv/Scripts/python.exe -m pytest backend/tests -q --ignore=backend/tests/test_docker_pipeline.py`.
+  Platform-specific/malformed-tree skips are not treated as passes.
+- PASS — separately enabled real Docker tests: **3 passed** using
+  `DEVFLOW_TEST_DOCKER=1` and `DEVFLOW_RUNNER_IMAGE=devflow-candidate-runner:compose`.
+  These exercise actual candidate containers and mocked model output, not a live model.
+- PASS — Ruff over backend source/tests and scripts; `git diff --check`.
+- FIXED, awaiting latest Linux CI — Docker local logging rejected `max-file=1`
+  with implicit compression. Set `compress=false`; the speculative proxy change was
+  removed. No credentials or ambient proxy variables are forwarded to downloaders.
+- BLOCKED on this Windows source path — the read-only NTFS fixture bind exposes
+  `0777` for committed `100644` files. Import now rejects this rather than hiding
+  mode changes. Earlier mock Compose success is not evidence for the stricter importer.
+  See BETA.md for the unvalidated WSL/native Linux alternative.
+- NOT RUN — live Chat Completions import → plan/code/review → Docker checks → human
+  approval → patch download/application. A maintainer must configure credentials
+  locally; no credentials were searched for, recorded here, or added to CI.
+- PENDING — final commit's hosted Actions results, clean-source startup/backup-restore
+  acceptance, production-browser evidence, and public Prerelease publication.
+
+The existing Compose CI smoke now exercises a public `colorama==0.4.6` wheel,
+`src` imports without pytest path configuration, non-root/offline/read-only candidate
+checks, no secret/socket mount, and actual `git apply --check`/apply. This describes
+what the test checks, not its outcome; only the matching hosted run establishes that.
+
 ## Source distribution
 
 - Distribute the reviewed source revision with `README.md`, `docs/BETA.md`,

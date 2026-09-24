@@ -7,12 +7,17 @@ import os
 import threading
 import uuid
 from pathlib import Path
+from time import monotonic
 
 from devflow.coordinator import RunCoordinator
 from devflow.errors import ActiveRunConflict, IdempotencyConflict, InvalidRunTransition
 from devflow.mock_provider import DeterministicMockProvider
 from devflow.models import RunStatus
 from devflow.workspace import ManagedWorkspace
+
+MODEL_STAGE_TIMEOUT_SECONDS = 130
+PROCESS_JOIN_SECONDS = 3
+MODEL_PHASES = frozenset({"plan", "code", "review"})
 
 
 def _execute_child(database_path, workspace_root, settings_root, mode, run_id, provider, runner):
@@ -73,11 +78,13 @@ class RunSupervisor:
                 try:
                     self._cleanup(run["id"])
                 except Exception:  # noqa: BLE001 - process/cleanup boundary never exposes worker data
-                    self.database.update_context(run["id"], cleanup_pending=True)
+                    self._cleanup_pending(run["id"])
                     continue
                 self.database.update_context(run["id"], cleanup_pending=False)
-                if context.get("stop_requested"):
+                if self.database.context(run["id"]).get("stop_requested"):
                     self.database.execution_error(run["id"], "stopped", "", canceled=True)
+                elif context.get("model_stage_timeout"):
+                    self._finish_failed(run["id"])
         self.coordinator._recover_incomplete_starts()
         self.coordinator._recover_incomplete_decisions()
         # A process can disappear between checkpoints without leaving a
@@ -191,48 +198,102 @@ class RunSupervisor:
         if hasattr(runner, "stop") and runner.stop(run_id) is False:
             raise RuntimeError("container cleanup not confirmed")
 
+    def _cleanup_pending(self, run_id):
+        # A separate event exposes cleanup failure to live/reconnecting SSE
+        # clients without replacing the original stage error. Repeated failed
+        # attempts may emit another event; all remain durable and replayable.
+        self.database.update_context(run_id, cleanup_pending=True)
+        self.database.append_node_event(
+            run_id, "cleanup", "run.cleanup_pending",
+            self.database.current_patch(run_id)["patch_revision"],
+        )
+
+    @staticmethod
+    def _terminate_child(process):
+        if process.is_alive():
+            process.terminate()
+            process.join(PROCESS_JOIN_SECONDS)
+        if process.is_alive():
+            process.kill()
+        process.join(PROCESS_JOIN_SECONDS)
+        return not process.is_alive()
+
+    def _finish_failed(self, run_id):
+        # Keep both the snapshot and the terminal event faithful to the first
+        # stage error. The DB also refuses FAILED when a stop has won the race.
+        error = self.database.snapshot(run_id).get("error") or {
+            "code": "worker_interrupted",
+            "message": "Execution stopped before reaching approval. Create a new task to retry.",
+        }
+        self.database.execution_error(run_id, error["code"], error["message"])
+        if self.database.context(run_id).get("stop_requested"):
+            self.database.execution_error(run_id, "stopped", "", canceled=True)
+
     def _watch(self, run_id, process):
+        phase = None
+        deadline = None
         while process.is_alive():
-            if self.database.context(run_id).get("stop_requested"):
-                process.terminate()
-                process.join(3)
-                if process.is_alive():
-                    process.kill()
+            context = self.database.context(run_id)
+            now = monotonic()
+            if context.get("phase") != phase:
+                phase = context.get("phase")
+                deadline = now + MODEL_STAGE_TIMEOUT_SECONDS if phase in MODEL_PHASES else None
+            stopping = context.get("stop_requested")
+            expired = deadline is not None and now >= deadline
+            if stopping or expired:
+                if expired and not stopping:
+                    # Persist before cleanup so a failed cleanup/restart cannot
+                    # promote a late approval checkpoint after the hard timeout.
+                    self.database.update_context(run_id, model_stage_timeout=phase)
+                    self.database.execution_error(
+                        run_id, "model_stage_timeout",
+                        f"Model stage {phase} exceeded the {MODEL_STAGE_TIMEOUT_SECONDS}-second deadline.",
+                        finalize=False,
+                    )
+                if not self._terminate_child(process):
+                    self._cleanup_pending(run_id)
+                    return
                 break
             process.join(0.1)
-        process.join()
+        process.join(PROCESS_JOIN_SECONDS)
         try:
             self._cleanup(run_id)
         except Exception:  # noqa: BLE001 - process/cleanup boundary never exposes worker data
             # Do not free the active slot when executable containers may remain.
-            self.database.update_context(run_id, cleanup_pending=True)
+            self._cleanup_pending(run_id)
             return
         self.database.update_context(run_id, cleanup_pending=False)
-        if self.database.context(run_id).get("stop_requested"):
-            self.database.execution_error(run_id, "stopped", "", canceled=True)
-        elif self.database.context(run_id).get("execution_outcome") == "approval":
-            try:
-                self.database.mark_awaiting_approval(run_id)
-            except InvalidRunTransition:
-                if self.database.context(run_id).get("stop_requested"):
-                    self.database.execution_error(run_id, "stopped", "", canceled=True)
-                else:
-                    raise
-        elif self.database.get_run(run_id)["status"] == "RUNNING":
-            self.database.execution_error(
-                run_id,
-                "worker_interrupted",
-                "Execution stopped before reaching approval. Create a new task to retry.",
-            )
+        with self.lock:
+            context = self.database.context(run_id)
+            if context.get("stop_requested"):
+                self.database.execution_error(run_id, "stopped", "", canceled=True)
+            elif context.get("model_stage_timeout"):
+                self._finish_failed(run_id)
+            elif context.get("execution_outcome") == "approval":
+                try:
+                    self.database.mark_awaiting_approval(run_id)
+                except InvalidRunTransition:
+                    if self.database.context(run_id).get("stop_requested"):
+                        self.database.execution_error(run_id, "stopped", "", canceled=True)
+                    else:
+                        raise
+            elif self.database.get_run(run_id)["status"] == "RUNNING":
+                self._finish_failed(run_id)
 
     def stop(self, run_id):
         with self.lock:
             self.database.request_stop(run_id)
             if run_id != self.run_id or not self.monitor or not self.monitor.is_alive():
+                if (
+                    run_id == self.run_id and self.process
+                    and not self._terminate_child(self.process)
+                ):
+                    self._cleanup_pending(run_id)
+                    return self.database.snapshot(run_id)
                 try:
                     self._cleanup(run_id)
                 except Exception:  # noqa: BLE001 - cleanup remains restart-retriable
-                    self.database.update_context(run_id, cleanup_pending=True)
+                    self._cleanup_pending(run_id)
                     return self.database.snapshot(run_id)
                 self.database.update_context(run_id, cleanup_pending=False)
                 self.database.execution_error(run_id, "stopped", "", canceled=True)

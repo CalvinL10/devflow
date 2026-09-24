@@ -43,17 +43,6 @@ def _cli(args: list[str], *, timeout: float = CLI_SECONDS) -> subprocess.Complet
                                        err.decode("utf-8", "replace"))
 
 
-def _proxy_environment() -> list[str]:
-    """Forward only standard outbound proxy settings to the wheel downloader."""
-    values = []
-    for name in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
-                 "http_proxy", "https_proxy", "no_proxy"):
-        value = os.environ.get(name)
-        if value:
-            values.append(f"--env={name}={value}")
-    return values
-
-
 def _checked(args: list[str], deadline: float) -> str:
     remaining = min(CLI_SECONDS, deadline - time.monotonic())
     if remaining <= 0:
@@ -228,12 +217,10 @@ class DockerDispatcher:
                 "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges:true",
                 "--pids-limit=64", "--memory=512m", "--cpus=1",
                 "--user=0:0" if root else "--user=10001:10001",
-                "--log-driver=local", "--log-opt=max-size=256k", "--log-opt=max-file=1",
+                "--log-driver=local", "--log-opt=max-size=256k", "--log-opt=max-file=1", "--log-opt=compress=false",
                 "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=384m" if network
                 else "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=64m",
                 "--env=HOME=/tmp", "--env=DEVFLOW_RUNNER_TIMEOUT_SECONDS=60"]
-        if network:
-            args.extend(_proxy_environment())
         if root:
             # Fixed offline ownership helper only, never candidate code.
             args.extend(["--cap-add=CHOWN", "--cap-add=DAC_OVERRIDE", "--cap-add=FOWNER"])

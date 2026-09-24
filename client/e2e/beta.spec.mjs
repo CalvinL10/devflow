@@ -186,6 +186,49 @@ test("stop uses its own endpoint and stays pending until backend confirms termin
   await expect(page.getByTestId("stop-button")).toHaveCount(0);
 });
 
+test("cleanup pending SSE refresh enables stop retry until backend confirms cleanup", async ({ page }) => {
+  let current = runSnapshot({ stop_requested: true, cleanup_pending: false });
+  await workbench(page, () => current);
+  let emitCleanup;
+  const cleanupReady = new Promise((resolve) => { emitCleanup = resolve; });
+  await page.route("**/api/runs/run-beta/events", async (route) => {
+    await cleanupReady;
+    const event = { run_id: "run-beta", seq: 1, type: "run.cleanup_pending" };
+    await route.fulfill({ contentType: "text/event-stream", body: `id: 1\nevent: run.event\ndata: ${JSON.stringify(event)}\n\n` });
+  });
+  let releaseStop;
+  const stopReady = new Promise((resolve) => { releaseStop = resolve; });
+  let attempts = 0;
+  await page.route("**/api/runs/run-beta/stop", async (route) => {
+    expect(route.request().headers()["x-devflow-request"]).toBe("1");
+    attempts += 1;
+    await stopReady;
+    current = { ...current, cleanup_pending: false, status: "CANCELED" };
+    await route.fulfill({ json: current });
+  });
+  await page.goto("/runs/run-beta");
+  const stop = page.getByTestId("stop-button");
+  await expect(stop).toBeDisabled();
+  await expect(stop).toHaveText("Stop requested");
+  current = { ...current, latest_seq: 1, cleanup_pending: true };
+  emitCleanup();
+  await expect(page.getByTestId("event-1")).toContainText("run.cleanup_pending");
+  await expect(page.getByTestId("cleanup-warning")).toContainText("containers have not been confirmed stopped");
+  await expect(page.getByTestId("cleanup-warning")).toContainText("still occupies the running slot");
+  await expect(page.getByTestId("cleanup-warning")).toContainText("restart the backend");
+  await expect(page.getByTestId("run-status")).toHaveText("RUNNING");
+  await expect(stop).toHaveText("Retry stop/cleanup");
+  await expect(stop).toBeEnabled();
+  await stop.click();
+  await expect.poll(() => attempts).toBe(1);
+  await expect(stop).toBeDisabled();
+  await expect(stop).toHaveText("Requesting stop…");
+  releaseStop();
+  await expect(page.getByTestId("run-status")).toHaveText("CANCELED");
+  await expect(page.getByTestId("cleanup-warning")).toHaveCount(0);
+  await expect(stop).toHaveCount(0);
+});
+
 test("failed run displays structured error and can be copied without automatic retry", async ({ page }) => {
   await setup(page);
   await workbench(page, () => runSnapshot({ status: "FAILED", error: { code: "provider_timeout", phase: "plan", message: "Provider timed out" } }));
