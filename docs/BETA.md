@@ -261,11 +261,12 @@ promised for this pending beta.
   not by silently switching to demo. Live provider quality/cost must be evaluated separately.
 - Original checkout updates are manual. No automatic merge, branch push or PR publishing.
 
-**PENDING for v0.2.0-beta.1:** clean-source Windows and Linux startup; real provider
-setup/test/import/run/approve/export/apply; explicit no-repository demo; stop during
-work/restart recovery; credential isolation; supported/unsupported wheel cases; full
-offline backup and restore; ordinary backend/frontend/E2E verification and actual hosted
-CI results. Record the exact source revision, platform and outcomes in release notes;
+**PENDING for v0.2.0-beta.1:** clean-source startup on supported filesystems; real provider
+setup/test/import/run/approve/export/apply; imported-run backup/export recovery and final
+publication-revision hosted CI. Local backend/frontend/E2E checks and a production
+no-repository demo with offline backup, separate-volume restore and browser approval
+have passed; these are not real-model or imported-run recovery evidence. See
+GITHUB_RELEASE.md for measured results and failed hosted attempts. Record the exact source revision, platform and outcomes in release notes;
 never substitute historical mock evidence for these exercises.
 
 ## Model request deadlines and cleanup failures
