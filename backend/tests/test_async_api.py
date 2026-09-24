@@ -5,6 +5,7 @@ import subprocess
 import time
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 from support import PassingRunner
 
@@ -207,3 +208,29 @@ def test_connection_test_cannot_start_while_task_active(tmp_path, monkeypatch):
         assert client.post("/api/settings/provider/test").status_code == 409
         client.post(f"/api/runs/{run_id}/stop")
         wait_status(client, run_id, {"CANCELED"})
+
+
+class FailingCheckRunner(PreparedRunner):
+    def run(self, workspace, run_id, action):
+        report = super().run(workspace, run_id, action)
+        return report.model_copy(update={"passed": False, "exit_code": 1})
+
+
+class RejectingReviewProvider(DeterministicMockProvider):
+    def review(self, plan, patch, checks):
+        return super().review(plan, patch, checks).model_copy(update={"recommendation": "reject"})
+
+
+@pytest.mark.parametrize("stage", ["checks", "review"])
+def test_completed_failed_stage_is_not_reported_as_worker_interruption(tmp_path, stage):
+    kwargs = ({"runner": FailingCheckRunner()} if stage == "checks"
+              else {"provider": RejectingReviewProvider()})
+    with TestClient(app_for(tmp_path, **kwargs)) as client:
+        run_id = client.post(
+            "/api/runs", json={"task": "failed stage", "request_id": stage}
+        ).json()["run_id"]
+        failed = wait_status(client, run_id, {"FAILED"})
+        assert failed["error"]["code"] == f"{stage}_failed"
+        assert failed["error"]["phase"] == ("lint_test" if stage == "checks" else "review")
+        assert client.get("/api/runs/active").json() is None
+        assert client.get(f"/api/runs/{run_id}/patch/download").status_code == 409

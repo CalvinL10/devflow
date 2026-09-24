@@ -108,6 +108,11 @@ class RunPipeline:
             lint=lint, test=test, passed=lint.passed and test.passed,
         )
         self.database.save_artifact(state.run_id, "check_report", report.model_dump(mode="json"))
+        if not report.passed:
+            self.database.execution_error(
+                state.run_id, "checks_failed",
+                "Candidate lint or tests failed; inspect the check report.", finalize=False,
+            )
         return {
             "check_report": report.model_dump(mode="json"),
             "status": RunStatus.RUNNING if report.passed else RunStatus.FAILED,
@@ -124,5 +129,11 @@ class RunPipeline:
         passed = report.recommendation == "approve" and not any(
             finding.severity == "error" for finding in report.findings
         )
+        if not passed:
+            self.database.execution_error(
+                state.run_id, "review_failed",
+                "Model review did not approve the candidate; inspect the review report.",
+                finalize=False,
+            )
         return {"review_report": report.model_dump(mode="json"),
                 "status": RunStatus.RUNNING if passed else RunStatus.FAILED}
