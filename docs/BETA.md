@@ -225,6 +225,10 @@ container. No API key is passed to the helper, dispatcher or candidate runner. D
 itself must remain running.
 **Provider secrets are intentionally excluded.** Re-enter credentials after a restore.
 Keep archives private: code, prompts and database records can still be sensitive.
+Use a native Linux/WSL backup directory when running the Bash launcher. On the
+validated host, a `/mnt/f` destination rejected the helper's restricted-permission operation;
+the backup correctly failed rather than creating an insecure usable archive. The virtual
+disk backing that Linux directory may still reside on D: or F:.
 The helper writes mode-0600 archives where the filesystem supports it; on Linux these
 are root-owned, so privileged access may be needed to inspect or move them. Keep the
 Windows destination ACL private as well. A failed archive is not usable; do not assume
@@ -250,8 +254,12 @@ this beta. Test it on a separate installation before relying on a backup:
    and verify an approved imported run's exported patch before resuming normal work.
 
 Do not use `docker compose down --volumes`, volume prune, or manual volume removal as
-routine stop/upgrade commands. No automatic cross-version migration compatibility is
-promised for this pending beta.
+routine stop/upgrade commands. Database schema version 2 upgrades the existing unversioned demo and version-1
+beta databases transactionally, preserving tasks, decisions, checkpoints and workspaces.
+Legacy `CANCELLED` task/result states become `CANCELED`; historical event/checkpoint
+payloads are retained. Unknown newer versions are refused, and a failed upgrade rolls
+back. Before upgrading, stop and back up with the old installation; restore that complete
+backup with its corresponding old source/image to roll back. There is no database downgrade.
 
 ## Known limitations and pending acceptance
 

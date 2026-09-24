@@ -15,6 +15,7 @@ from devflow.errors import (
     InvalidRunTransition,
     RevisionConflict,
 )
+from devflow.migrations import migrate
 from devflow.models import CheckReport, DecisionKind, FilePatchSet, ReviewReport, RunStatus
 
 ACTIVE_STATUSES = {
@@ -57,28 +58,7 @@ class Database:
     def initialize(self) -> None:
         schema = Path(__file__).with_name("schema.sql").read_text(encoding="utf-8")
         with self.connect() as connection:
-            # CREATE IF NOT EXISTS cannot upgrade the pre-Round-4 cancellation
-            # CHECK constraints. Refuse that known incompatible input before any
-            # schema/data changes; this slice does not perform an implicit migration.
-            definitions = {
-                row["name"]: row["sql"] for row in connection.execute(
-                    "SELECT name, sql FROM sqlite_master WHERE type = 'table' "
-                    "AND name IN ('runs', 'decisions')"
-                )
-            }
-            if (
-                "runs" in definitions and "'CANCELED'" not in definitions["runs"]
-                or "decisions" in definitions and "'cancel'" not in definitions["decisions"]
-            ):
-                raise RuntimeError(
-                    "incompatible pre-Round-4 database: cancellation constraints require migration; "
-                    "back up the database and workspace, then use a separate fresh database and "
-                    "workspace or an explicitly reviewed migration. No automatic upgrade is supported."
-                )
-            version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version > 1:
-                raise RuntimeError("database is newer than this application; restore a matching backup")
-            connection.executescript("BEGIN IMMEDIATE;\n" + schema + "\nPRAGMA user_version = 1;\nCOMMIT;")
+            migrate(connection, schema)
             now = utc_now()
             connection.execute(
                 """

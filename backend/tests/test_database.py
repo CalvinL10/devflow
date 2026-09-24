@@ -259,8 +259,7 @@ def test_domain_foreign_keys_are_enabled(database: Database) -> None:
 
 
 @pytest.mark.parametrize("legacy_status", ["RUNNING", "CANCELLED"])
-def test_incompatible_old_database_is_rejected_before_schema_or_data_changes(tmp_path, legacy_status):
-    # Real schema from 43b3767 (the parent of Round 4), not a synthetic constraint.
+def test_legacy_migration_preserves_history_and_updates_cancellation(tmp_path, legacy_status):
     schema = (Path(__file__).parent / "fixtures" / "pre_round4_schema.sql").read_text(encoding="utf-8")
     database = Database(tmp_path / "old.sqlite")
     with database.connect() as connection:
@@ -270,13 +269,46 @@ def test_incompatible_old_database_is_rejected_before_schema_or_data_changes(tmp
             "INSERT INTO runs(id, thread_id, workspace_id, base_workspace_revision, status, created_at, updated_at) "
             "VALUES ('old-run', 'old-thread', 'default', 0, ?, 'then', 'then')", (legacy_status,),
         )
+        connection.execute("INSERT INTO patches VALUES ('p', 'old-run', 1, 0, '/candidate', '{}', 'then')")
+        connection.execute("INSERT INTO decisions VALUES ('d','old-run','p',1,'reject','retained','REJECTED',NULL,'then')")
+        connection.execute("INSERT INTO run_checkpoint_refs VALUES ('old-run','old-thread','','saved','then')")
+        connection.execute("INSERT INTO run_events VALUES ('old-run',1,'old.event',NULL,'{}','then')")
+        connection.execute("CREATE TABLE checkpoints (data BLOB)")
+        connection.execute("INSERT INTO checkpoints VALUES (X'000102')")
+        tables = ['patches', 'decisions', 'run_checkpoint_refs', 'run_events', 'checkpoints']
+        before = {t: [tuple(r) for r in connection.execute(f'SELECT * FROM {t}')] for t in tables}
+    database.initialize()
+    database.initialize()
+    with database.connect() as connection:
+        assert connection.execute("SELECT status FROM runs").fetchone()[0] == (
+            "CANCELED" if legacy_status == "CANCELLED" else legacy_status
+        )
+        assert {t: [tuple(r) for r in connection.execute(f'SELECT * FROM {t}')] for t in tables} == before
+        assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        connection.execute("UPDATE runs SET status='CANCELED'")
+        connection.execute("UPDATE decisions SET kind='cancel'")
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute("UPDATE runs SET status='invalid'")
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute("UPDATE decisions SET kind='invalid'")
+
+
+def test_migration_rolls_back_when_foreign_key_validation_fails(tmp_path):
+    database = Database(tmp_path / "broken.sqlite")
+    schema = (Path(__file__).parent / "fixtures" / "pre_round4_schema.sql").read_text(encoding="utf-8")
+    with database.connect() as connection:
+        connection.executescript(schema)
+        connection.execute("PRAGMA foreign_keys=OFF")
+        connection.execute("INSERT INTO run_events VALUES ('missing',1,'old.event',NULL,'{}','then')")
         before = list(connection.iterdump())
-    with pytest.raises(RuntimeError, match="incompatible.*database"):
+    with pytest.raises(RuntimeError, match="invalid references"):
         database.initialize()
     with database.connect() as connection:
         assert list(connection.iterdump()) == before
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 0
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
-        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
 def test_additive_beta_migration_preserves_tasks_checkpoints_and_decisions(database):
@@ -294,7 +326,7 @@ def test_additive_beta_migration_preserves_tasks_checkpoints_and_decisions(datab
     database.initialize()
     database.initialize()
     with database.connect() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
         assert {table: [tuple(row) for row in connection.execute(f"SELECT * FROM {table}")]
                 for table in tables} == before
         assert connection.execute("SELECT * FROM run_context").fetchall() == []
@@ -302,8 +334,8 @@ def test_additive_beta_migration_preserves_tasks_checkpoints_and_decisions(datab
 
 def test_newer_database_version_refused_without_downgrade(database):
     with database.connect() as connection:
-        connection.execute("PRAGMA user_version = 2")
+        connection.execute("PRAGMA user_version = 3")
     with pytest.raises(RuntimeError, match="newer"):
         database.initialize()
     with database.connect() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
