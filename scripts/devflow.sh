@@ -6,18 +6,20 @@ if (($#)); then shift; fi
 REPOSITORY=''
 OUTPUT=''
 DEMO=false
+PORT=3000
 fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 while (($#)); do
     case "$1" in
         --repository) (($# >= 2)) || fail '--repository needs a path'; REPOSITORY="$2"; shift 2 ;;
         --output) (($# >= 2)) || fail '--output needs a directory'; OUTPUT="$2"; shift 2 ;;
         --demo) DEMO=true; shift ;;
+        --port) (($# >= 2)) || fail '--port needs a number'; PORT="$2"; shift 2 ;;
         *) fail "Unknown option: $1" ;;
     esac
 done
 case "$COMMAND" in
     help|-h|--help)
-        printf '%s\n' 'Usage: bash scripts/devflow.sh start --repository /path/to/clean-repo' \
+        printf '%s\n' 'Usage: bash scripts/devflow.sh start --repository /path/to/clean-repo [--port 3000]' \
             '       bash scripts/devflow.sh start --demo' \
             '       bash scripts/devflow.sh status|logs|stop [--demo]' \
             '       bash scripts/devflow.sh backup --output /path/to/backups [--demo]'
@@ -28,6 +30,9 @@ esac
 [[ $DEMO == false || -z $REPOSITORY ]] || fail 'Choose --demo OR --repository, not both.'
 [[ $COMMAND == start || -z $REPOSITORY ]] || fail '--repository is only used with start.'
 [[ $COMMAND == backup || -z $OUTPUT ]] || fail '--output is only used with backup.'
+[[ $PORT =~ ^[1-9][0-9]{3,4}$ ]] || fail '--port must be an integer from 1024 to 65535.'
+(( PORT >= 1024 && PORT <= 65535 )) || fail '--port must be an integer from 1024 to 65535.'
+export DEVFLOW_PORT="$PORT"
 command -v docker >/dev/null || fail 'Install Docker with the Compose plugin.'
 VERSION="$(docker compose version --short)"
 VERSION="${VERSION#v}"; VERSION="${VERSION%%-*}"
@@ -59,12 +64,12 @@ fi
 case "$COMMAND" in
     start)
         RUNNING="$("${COMPOSE[@]}" ps --status running --quiet frontend)"
-        if [[ -z $RUNNING ]] && (exec 3<>/dev/tcp/127.0.0.1/3000) 2>/dev/null; then
-            fail 'Port 127.0.0.1:3000 is occupied. Stop the other real/demo stack or service first.'
+        if [[ -z $RUNNING ]] && (exec 3<>/dev/tcp/127.0.0.1/"$PORT") 2>/dev/null; then
+            fail "Port 127.0.0.1:$PORT is occupied. Choose another --port or stop the other service first."
         fi
-        printf '%s\n' 'Docker/Compose diagnostics passed. Only frontend 127.0.0.1:3000 is published; backend 8000 stays internal.'
+        printf '%s\n' "Docker/Compose diagnostics passed. Only frontend 127.0.0.1:$PORT is published; backend 8000 stays internal."
         "${COMPOSE[@]}" up --build --detach --wait --wait-timeout 180
-        printf '%s\n' 'Open http://127.0.0.1:3000 (use this exact origin).'
+        printf '%s\n' "Open http://127.0.0.1:$PORT (use this exact origin)."
         ;;
     status) "${COMPOSE[@]}" ps --all ;;
     logs) "${COMPOSE[@]}" logs --tail 200 --follow ;;

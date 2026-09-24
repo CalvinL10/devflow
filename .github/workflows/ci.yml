@@ -27,7 +27,7 @@ jobs:
           uv run --locked pytest -q -p no:cacheprovider
           tests/test_models.py tests/test_candidate_runner.py tests/test_mock_provider.py
           tests/test_database.py tests/test_workspace.py tests/test_staging.py
-          tests/test_compose.py tests/test_docker_runner.py tests/test_provider.py
+          tests/test_compose.py tests/test_launchers.py tests/test_docker_runner.py tests/test_provider.py
           tests/test_project_import.py tests/test_patch_export.py tests/test_dependencies.py
           tests/test_runner_beta.py tests/test_provider_probe.py
       - name: Backend integration tests

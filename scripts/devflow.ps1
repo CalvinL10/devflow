@@ -4,12 +4,15 @@ param(
     [ValidateSet('start', 'status', 'logs', 'stop', 'backup', 'help')]
     [string]$Command = 'help',
     [string]$Repository,
+    [ValidateRange(1024, 65535)]
+    [int]$Port = 3000,
     [switch]$Demo,
     [string]$OutputDirectory
 )
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 $PreviousProjectPath = $env:DEVFLOW_PROJECT_PATH
+$PreviousPort = $env:DEVFLOW_PORT
 
 function Invoke-Docker {
     & docker @args
@@ -23,12 +26,13 @@ function Read-Git([string[]]$GitArgs) {
 
 try {
     if ($Command -eq 'help') {
-        Write-Host 'Usage: ./scripts/devflow.ps1 start -Repository C:/projects/example'
+        Write-Host 'Usage: ./scripts/devflow.ps1 start -Repository C:/projects/example [-Port 3000]'
         Write-Host '       ./scripts/devflow.ps1 start -Demo'
         Write-Host '       ./scripts/devflow.ps1 status|logs|stop [-Demo]'
         Write-Host '       ./scripts/devflow.ps1 backup -OutputDirectory C:/backups/devflow [-Demo]'
         exit 0
     }
+    $env:DEVFLOW_PORT = [string]$Port
     if ($Demo -and $Repository) { throw 'Choose -Demo OR -Repository, not both.' }
     if ($Command -ne 'start' -and $Repository) { throw '-Repository is only used with start.' }
     if ($Command -ne 'backup' -and $OutputDirectory) { throw '-OutputDirectory is only used with backup.' }
@@ -61,14 +65,14 @@ try {
         'start' {
             $running = @(Invoke-Docker @compose ps --status running --quiet frontend)
             if (!$running.Count) {
-                $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Parse('127.0.0.1'), 3000)
+                $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Parse('127.0.0.1'), $Port)
                 try { $listener.Start() }
-                catch { throw 'Port 127.0.0.1:3000 is occupied. Stop the other real/demo stack or service first.' }
+                catch { throw "Port 127.0.0.1:$Port is occupied. Choose another -Port or stop the other service first." }
                 finally { $listener.Stop() }
             }
-            Write-Host 'Docker/Compose diagnostics passed. Only frontend port 127.0.0.1:3000 is published; backend 8000 stays internal.'
+            Write-Host "Docker/Compose diagnostics passed. Only frontend port 127.0.0.1:$Port is published; backend 8000 stays internal."
             Invoke-Docker @compose up --build --detach --wait --wait-timeout 180
-            Write-Host 'Open http://127.0.0.1:3000 (use this exact origin).'
+            Write-Host "Open http://127.0.0.1:$Port (use this exact origin)."
         }
         'status' { Invoke-Docker @compose ps --all }
         'logs' { Invoke-Docker @compose logs --tail 200 --follow }
@@ -113,4 +117,5 @@ print('Backup complete: ' + name)
     exit 1
 } finally {
     $env:DEVFLOW_PROJECT_PATH = $PreviousProjectPath
+    $env:DEVFLOW_PORT = $PreviousPort
 }

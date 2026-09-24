@@ -25,11 +25,12 @@ conceal dirty worktree modes.
 Use a fresh, mode-preserving Linux checkout, or WSL-native Linux storage such as
 `/home/<user>/projects` (not `/mnt/c` or `/mnt/f`). Launch Compose from that Linux
 environment only when Docker is already available there, and verify actual
-`/project` modes against the commit before import. On the diagnosed Windows host,
-both Ubuntu WSL distributions are installed but Docker integration is unavailable:
-**the WSL route remains unvalidated on this host**. Distribution installation alone
-is not evidence of Docker integration. User Docker settings are not changed
-automatically.
+`/project` modes against the commit before import. The WSL-native route has been validated with Ubuntu and Docker Desktop integration:
+Git modes survived the read-only bind and the imported source remained unchanged.
+Enable integration for your chosen distro in Docker Desktop before starting.
+Linux filesystem semantics do not require the C: drive: the WSL virtual disk and Docker
+storage may live on D: or F:. A Linux path inside that disk is different from an NTFS
+bind at `/mnt/f`. Startup scripts do not relocate disks or change Docker settings.
 
 Native Windows importer execution can check ordinary `100644` files, but rejects
 committed `100755` files because executable-bit verification is unavailable.
@@ -40,7 +41,7 @@ import; it does not establish Windows NTFS support.
 ## Start real mode
 
 Install Git and Docker with Linux containers and Docker Compose **2.24.4 or newer**.
-Use a local Docker daemon, not a remote context. Port 127.0.0.1:3000 must be free.
+Use a local Docker daemon, not a remote context. Port 127.0.0.1:3000 must be free, or select another local port.
 Run from the DevFlow source directory; no host Python or Node installation is needed
 for the Compose path. Initial builds and provider/dependency operations need networking.
 
@@ -66,6 +67,11 @@ the NTFS import limitation above still applies):
 bash scripts/devflow.sh start --repository /home/me/projects/my-python-project
 bash scripts/devflow.sh status
 ```
+
+If port 3000 is occupied, append `-Port 3001` in PowerShell or `--port 3001`
+in Bash. The launcher updates both the loopback listener and the allowed origin;
+open `http://127.0.0.1:3001` instead. Use the same port flag for lifecycle commands.
+For direct Compose usage, set `DEVFLOW_PORT=3001`. No backend port is published.
 
 Open **http://127.0.0.1:3000**, not a LAN address or an alternate hostname.
 

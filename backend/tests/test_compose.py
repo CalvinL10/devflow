@@ -30,7 +30,10 @@ def test_only_frontend_port_is_bound_to_loopback_by_default() -> None:
 
     services = yaml.safe_load(compose)["services"]
     assert not services["backend"].get("ports")
-    assert services["frontend"]["ports"] == ["127.0.0.1:3000:3000"]
+    assert services["frontend"]["ports"] == ["127.0.0.1:${DEVFLOW_PORT:-3000}:3000"]
+    assert services["backend"]["environment"]["DEVFLOW_PUBLIC_ORIGIN"] == (
+        "http://127.0.0.1:${DEVFLOW_PORT:-3000}"
+    )
     assert "devflow-secrets:/var/lib/devflow-secrets" in services["backend"]["volumes"]
     assert all("devflow-secrets" not in str(volume)
                for volume in services["runner-dispatcher"]["volumes"])

@@ -23,11 +23,12 @@ conceal dirty worktree modes.
 Use a fresh, mode-preserving Linux checkout, or WSL-native Linux storage such as
 `/home/<user>/projects` (not `/mnt/c` or `/mnt/f`). Launch Compose from that Linux
 environment only when Docker is already available there, and verify actual
-`/project` modes against the commit before import. On the diagnosed Windows host,
-both Ubuntu WSL distributions are installed but Docker integration is unavailable:
-**the WSL route remains unvalidated on this host**. Distribution installation alone
-is not evidence of Docker integration. User Docker settings are not changed
-automatically.
+`/project` modes against the commit before import. The WSL-native route has been validated with Ubuntu and Docker Desktop integration:
+Git modes survived the read-only bind and the imported source remained unchanged.
+Enable integration for your chosen distro in Docker Desktop before starting.
+Linux filesystem semantics do not require the C: drive: the WSL virtual disk and Docker
+storage may live on D: or F:. A Linux path inside that disk is different from an NTFS
+bind at `/mnt/f`. Startup scripts do not relocate disks or change Docker settings.
 
 Native Windows importer execution can check ordinary `100644` files, but rejects
 committed `100755` files because executable-bit verification is unavailable.
@@ -41,7 +42,7 @@ import; it does not establish Windows NTFS support.
   with Bash and Docker Engine. Use a local Docker context with access to the repository
   and backup directories. Remote daemons and Windows containers are unsupported.
 - Git and Docker Compose 2.24.4+ (`!override` is used to remove the demo project bind).
-- Free loopback port 3000. Backend port 8000 is not published and need not be free on
+- Free loopback port 3000 (or a selected port from 1024 to 65535). Backend port 8000 is not published and need not be free on
   the host. Do not change the published hostname without also reviewing origin security.
 - Network access for the first image build, real provider requests, and supported PyPI
   wheel downloads. Offline stop/backup does not imply offline first-time startup.
@@ -66,7 +67,7 @@ validation: MSYS path rewriting can alter Docker mount arguments. Use PowerShell
 Windows or Bash inside a properly configured Linux/WSL environment.
 
 The scripts diagnose Docker/Compose availability, Linux container mode, repository/HEAD
-existence and port 3000, then build and wait for startup. They do not determine whether
+existence and the selected port, then build and wait for startup. They do not determine whether
 the source is clean. Source-repository `git status` can execute configured clean filters
 even when hooks and fsmonitor are disabled; startup therefore never runs source status
 or refreshes its index. Cleanliness is delegated to the safe isolated import preview,
@@ -77,6 +78,11 @@ A missing project variable in direct real-mode Compose usage points to a deliber
 missing mount path and fails startup rather than silently importing this checkout.
 
 ## Setup, import and approval
+
+If port 3000 is occupied, append `-Port 3001` in PowerShell or `--port 3001`
+in Bash. The launcher updates both the loopback listener and the allowed origin;
+open `http://127.0.0.1:3001` instead. Use the same port flag for lifecycle commands.
+For direct Compose usage, set `DEVFLOW_PORT=3001`. No backend port is published.
 
 Open **http://127.0.0.1:3000**. Keep this exact origin, including the port.
 
@@ -230,7 +236,12 @@ this beta. Test it on a separate installation before relying on a backup:
 1. Keep all services stopped and retain the original volumes/archive until recovery is
    verified. Use the same source revision and compatible image as the backup.
 2. Create a fresh data volume and extract the trusted archive's `data/` contents into
-   its root, preserving numeric ownership (backend UID/GID 10001). Do not extract an
+   its root, preserving numeric ownership (backend UID/GID 10001). **Also set the
+   fresh volume root to UID/GID 10001**, not only its extracted files: using tar's
+   `--strip-components=1` can leave the volume root owned by root and cause SQLite
+   "attempt to write a readonly database". In a recovery helper mounting only the
+   fresh data volume at `/restore`, run `chown 10001:10001 /restore` after extraction.
+   Do not recursively change the original volume or source repository. Do not extract an
    untrusted tar file on your host or overwrite a live volume.
 3. Attach that data volume as `devflow-data` for the recovery installation. Start with a
    fresh credential volume and re-enter the provider settings. Never restore only SQLite
@@ -261,13 +272,12 @@ promised for this pending beta.
   not by silently switching to demo. Live provider quality/cost must be evaluated separately.
 - Original checkout updates are manual. No automatic merge, branch push or PR publishing.
 
-**PENDING for v0.2.0-beta.1:** clean-source startup on supported filesystems; real provider
-setup/test/import/run/approve/export/apply; imported-run backup/export recovery and final
-publication-revision hosted CI. Local backend/frontend/E2E checks and a production
-no-repository demo with offline backup, separate-volume restore and browser approval
-have passed; these are not real-model or imported-run recovery evidence. See
-GITHUB_RELEASE.md for measured results and failed hosted attempts. Record the exact source revision, platform and outcomes in release notes;
-never substitute historical mock evidence for these exercises.
+Real-provider acceptance and imported-run recovery have passed: HTTPS Chat Completions
+with `deepseek-flash`, public wheel preparation, five passing isolated pytest cases,
+model review, browser approval, patch download and independent native Git application.
+After a data-only backup and separate-volume restore, the approved patch was byte-identical
+and no provider credential was present. Final source/CI evidence is recorded in
+[GITHUB_RELEASE.md](GITHUB_RELEASE.md); this is not a claim of universal model support.
 
 ## Model request deadlines and cleanup failures
 

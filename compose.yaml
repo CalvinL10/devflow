@@ -10,7 +10,7 @@ services:
       DEVFLOW_PROJECT_PATH: /project
       DEVFLOW_PROVIDER_SETTINGS: /var/lib/devflow-secrets
       DEVFLOW_LLM_PROVIDER: chat_completions
-      DEVFLOW_PUBLIC_ORIGIN: http://127.0.0.1:3000
+      DEVFLOW_PUBLIC_ORIGIN: http://127.0.0.1:${DEVFLOW_PORT:-3000}
       DEVFLOW_SECURITY_ENABLED: "1"
       DEVFLOW_RUNNER_SOCKET: /run/devflow/runner.sock
       LANGGRAPH_STRICT_MSGPACK: "true"
@@ -57,7 +57,7 @@ services:
     environment:
       DEVFLOW_API_URL: http://backend:8000
     ports:
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:${DEVFLOW_PORT:-3000}:3000"
     depends_on:
       backend:
         condition: service_healthy
